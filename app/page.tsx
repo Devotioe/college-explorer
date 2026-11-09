@@ -49,7 +49,7 @@ type Course = {
   source: "附件資料" | "政大原型示範" | "原型語意示範";
 };
 
-const courses: Course[] = [
+const featuredMapCourses: Course[] = [
   {
     id: "nthu-cs1001", school: "NTHU", code: "CS 1001", title: "程式設計一",
     titleEn: "Introduction to Programming I", unit: "資訊工程學系", credits: 3,
@@ -213,12 +213,51 @@ const domainRules: Record<string, string[]> = {
 };
 
 function courseDomains(course: Course) {
-  return Object.entries(domainRules).filter(([, keywords]) => keywords.some((keyword) => course.tags.includes(keyword))).map(([domain]) => domain);
+  const direct = course.tags.filter((tag) => Object.hasOwn(domainRules, tag));
+  const derived = Object.entries(domainRules).filter(([, keywords]) => keywords.some((keyword) => course.tags.includes(keyword))).map(([domain]) => domain);
+  return [...new Set([...direct, ...derived])];
 }
 
 function sharedDomains(a: Course, b: Course) {
   const bDomains = new Set(courseDomains(b));
   return courseDomains(a).filter((domain) => bDomains.has(domain));
+}
+
+type ApiCourse = {
+  id: string; school: School; code: string; titleZh: string; titleEn: string; department: string;
+  credits: number; level: Course["level"]; topics: string; teacher?: string; language?: string;
+  schedule?: string; semester?: string;
+};
+
+function apiCourseToCourse(item: ApiCourse): Course {
+  let tags: string[] = [];
+  try { tags = JSON.parse(item.topics); } catch { tags = ["其他領域"]; }
+  const fit = 76 + [...item.id].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 19;
+  const title = item.titleZh || item.titleEn || item.code;
+  return {
+    id: item.id,
+    school: item.school,
+    code: item.code,
+    title,
+    titleEn: item.titleEn || title,
+    unit: item.department,
+    credits: Number(item.credits) || 0,
+    level: item.level === "研究所" ? "研究所" : "大學部",
+    language: item.language?.includes("英") ? "英文" : "中文",
+    time: item.schedule || "時間待確認",
+    teacher: item.teacher || "教師待確認",
+    tags,
+    semanticTerms: [item.titleEn, ...tags],
+    summary: `${item.titleEn || title}，${item.department}於 ${item.semester || "11510"} 學期開設。`,
+    fit,
+    reasons: [
+      { label: "主題相符", value: fit, note: `課程歸於${tags.join("、")}` },
+      { label: "資料完整度", value: item.schedule ? 90 : 70, note: item.schedule ? "包含開課時段資料" : "時段仍待補充" },
+      { label: "跨校比較", value: 86, note: "可依共同學習領域尋找比較課程" },
+      { label: "路徑價值", value: 82, note: "可加入個人化學習路徑" },
+    ],
+    source: item.school === "NTHU" ? "附件資料" : "政大原型示範",
+  };
 }
 
 const connections = [
@@ -246,7 +285,9 @@ export default function Home() {
   const [school, setSchool] = useState<"ALL" | School>("ALL");
   const [level, setLevel] = useState<"ALL" | Course["level"]>("ALL");
   const [language, setLanguage] = useState<"ALL" | Course["language"]>("ALL");
-  const [selected, setSelected] = useState<Course>(courses[0]);
+  const [catalogCourses, setCatalogCourses] = useState<Course[]>([]);
+  const [catalogStatus, setCatalogStatus] = useState("正在連接 D1 課程資料庫…");
+  const [selected, setSelected] = useState<Course>(featuredMapCourses[0]);
   const [compare, setCompare] = useState<Course[]>([]);
   const [saved, setSaved] = useState<string[]>(["nccu-ds205"]);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -260,6 +301,47 @@ export default function Home() {
     document.documentElement.dataset.theme = nextTheme;
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadCatalog = async () => {
+      try {
+        const statusResponse = await fetch("/api/courses/bootstrap");
+        if (!statusResponse.ok) throw new Error("無法讀取匯入狀態");
+        let status = await statusResponse.json() as { imported: number; total: number; done: boolean };
+        let cursor = status.imported;
+        while (!status.done && !cancelled) {
+          setCatalogStatus(`正在匯入 D1：${Math.min(cursor, status.total)} / ${status.total} 門`);
+          const response = await fetch("/api/courses/bootstrap", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ cursor }) });
+          if (!response.ok) throw new Error("課程匯入失敗");
+          const next = await response.json() as { cursor: number; total: number; done: boolean };
+          cursor = next.cursor;
+          status = { imported: cursor, total: next.total, done: next.done };
+        }
+        if (cancelled) return;
+        const first = await fetch("/api/courses?page=1&pageSize=500");
+        if (!first.ok) throw new Error("無法讀取課程");
+        const firstData = await first.json() as { courses: ApiCourse[]; pagination: { pages: number; total: number } };
+        const pages = [firstData.courses];
+        for (let page = 2; page <= firstData.pagination.pages; page += 1) {
+          setCatalogStatus(`正在載入課程：${Math.min((page - 1) * 500, firstData.pagination.total)} / ${firstData.pagination.total}`);
+          const response = await fetch(`/api/courses?page=${page}&pageSize=500`);
+          if (!response.ok) throw new Error("課程分頁載入失敗");
+          const data = await response.json() as { courses: ApiCourse[] };
+          pages.push(data.courses);
+        }
+        if (cancelled) return;
+        const loaded = pages.flat().map(apiCourseToCourse);
+        setCatalogCourses(loaded);
+        setSelected((current) => loaded.find((course) => course.id === current.id) ?? loaded[0] ?? current);
+        setCatalogStatus(`D1 已載入 ${loaded.length.toLocaleString("zh-TW")} 門課程`);
+      } catch (error) {
+        if (!cancelled) setCatalogStatus(error instanceof Error ? error.message : "課程資料載入失敗");
+      }
+    };
+    void loadCatalog();
+    return () => { cancelled = true; };
+  }, []);
+
   const toggleTheme = () => {
     const nextTheme = theme === "light" ? "dark" : "light";
     setTheme(nextTheme);
@@ -269,13 +351,15 @@ export default function Home() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return courses.filter((course) => {
+    return catalogCourses.filter((course) => {
       const literal = [course.title, course.titleEn, course.code, course.unit, ...course.tags].join(" ").toLowerCase();
       const semantic = (course.semanticTerms ?? []).join(" ").toLowerCase();
       const matchesQuery = !q || literal.includes(q) || semantic.includes(q);
       return matchesQuery && (school === "ALL" || course.school === school) && (level === "ALL" || course.level === level) && (language === "ALL" || course.language === language);
     });
-  }, [query, school, level, language]);
+  }, [catalogCourses, query, school, level, language]);
+
+  const visibleCourses = filtered.slice(0, 120);
 
   const toggleCompare = (course: Course) => {
     setCompare((current) => {
@@ -340,10 +424,10 @@ export default function Home() {
 
             <div>
               <div className="mb-4 flex items-end justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#89918e]">Personalized discovery</p><h2 className="mt-1 text-2xl font-bold tracking-tight">為你挑選的課程</h2></div><button className="flex items-center gap-2 rounded-xl border border-black/10 bg-white px-3 py-2 text-xs font-bold xl:hidden" onClick={() => setFiltersOpen((open) => !open)}><SlidersHorizontal size={15} /> 篩選</button></div>
-              <div className="mb-4 flex flex-wrap gap-2"><span className="filter-summary"><University size={13} />{school === "ALL" ? "兩校" : schoolLabel[school]}</span><span className="filter-summary"><GraduationCap size={13} />{level === "ALL" ? "所有層級" : level}</span><span className="filter-summary"><Languages size={13} />{language === "ALL" ? "所有語言" : language}</span><span className="ml-auto self-center text-xs text-[#6d7773]">找到 {filtered.length} 門</span></div>
+              <div className="mb-4 flex flex-wrap gap-2"><span className="filter-summary"><University size={13} />{school === "ALL" ? "兩校" : schoolLabel[school]}</span><span className="filter-summary"><GraduationCap size={13} />{level === "ALL" ? "所有層級" : level}</span><span className="filter-summary"><Languages size={13} />{language === "ALL" ? "所有語言" : language}</span><span className="ml-auto self-center text-xs text-[#6d7773]">{catalogStatus}・符合 {filtered.length.toLocaleString("zh-TW")} 門</span></div>
               {query.trim() && filtered.some((course) => !(course.title + course.titleEn + course.code + course.unit + course.tags.join("")).toLowerCase().includes(query.trim().toLowerCase())) && <div className="semantic-hint mb-4 flex items-start gap-2 rounded-2xl border px-4 py-3 text-xs leading-5"><Sparkles size={15} className="mt-0.5 shrink-0" /><span><strong>語意延伸：</strong>「{query.trim()}」可能代表應用開發需求，因此也推薦沒有相同字面的基礎課程。</span></div>}
               <div className="grid gap-4 lg:grid-cols-2">
-                {filtered.map((course) => (
+                {visibleCourses.map((course) => (
                   <article key={course.id} className={`course-card group ${selected.id === course.id ? "course-card-selected" : ""}`} onClick={() => setSelected(course)}>
                     <div className="flex items-start justify-between gap-3"><div className="flex items-center gap-2"><SchoolBadge school={course.school} /><span className="text-[11px] font-bold tracking-wide text-[#7d8783]">{course.code}</span></div><button aria-label="收藏課程" className={`icon-button ${saved.includes(course.id) ? "icon-button-saved" : ""}`} onClick={(event) => { event.stopPropagation(); setSaved((items) => items.includes(course.id) ? items.filter((id) => id !== course.id) : [...items, course.id]); }}><Heart size={16} fill={saved.includes(course.id) ? "currentColor" : "none"} /></button></div>
                     <h3 className="mt-4 text-lg font-bold tracking-tight">{course.title}</h3><p className="mt-1 line-clamp-1 text-xs text-[#77817d]">{course.titleEn}</p><p className="mt-3 line-clamp-2 text-sm leading-6 text-[#53605c]">{course.summary}</p>
@@ -352,6 +436,7 @@ export default function Home() {
                   </article>
                 ))}
               </div>
+              {filtered.length > visibleCourses.length && <p className="mt-4 text-center text-xs text-[#7b7480]">目前顯示前 {visibleCourses.length} 門；輸入課名、課號或主題可縮小結果。</p>}
               {filtered.length === 0 && <div className="rounded-3xl border border-dashed border-black/15 bg-white/50 px-6 py-16 text-center"><Search className="mx-auto text-[#9aa29f]" /><h3 className="mt-3 font-bold">沒有符合條件的課程</h3><p className="mt-1 text-sm text-[#75807c]">試著清除部分篩選條件或換一個關鍵字。</p><button className="mt-4 text-sm font-bold text-[#d65f43]" onClick={resetFilters}>清除全部</button></div>}
             </div>
             <aside className="hidden xl:block"><CourseDetail course={selected} compare={compare} toggleCompare={toggleCompare} setView={setView} /></aside>
@@ -360,7 +445,7 @@ export default function Home() {
       </div>
 
       <div className="fixed bottom-4 left-1/2 z-30 flex -translate-x-1/2 items-center gap-3 rounded-2xl border border-black/8 bg-white/95 px-4 py-3 shadow-[0_16px_50px_rgba(23,33,31,.16)] backdrop-blur xl:hidden"><div className="min-w-0"><p className="truncate text-xs font-bold">{selected.title}</p><p className="text-[10px] text-[#77817d]">適合度 {selected.fit}%</p></div><button className="rounded-lg bg-[#17211f] px-3 py-2 text-xs font-bold text-white" onClick={() => setCompareOpen(true)}>詳情</button></div>
-      {compareOpen && <CompareModal courses={compare} allCourses={courses} setCourses={setCompare} close={() => setCompareOpen(false)} remove={(course) => setCompare((items) => items.filter((item) => item.id !== course.id))} />}
+      {compareOpen && <CompareModal courses={compare} allCourses={catalogCourses} setCourses={setCompare} close={() => setCompareOpen(false)} remove={(course) => setCompare((items) => items.filter((item) => item.id !== course.id))} />}
     </main>
   );
 }
@@ -389,7 +474,7 @@ function RecommendationMap({ selected, setSelected, compare, toggleCompare, setC
   const [historyOpen, setHistoryOpen] = useState(false);
   const [mapStatus, setMapStatus] = useState("");
   const positions: Record<string, [number, number]> = { "nthu-cs1001": [17, 43], "nthu-aes4701": [48, 38], "nccu-sust301": [69, 25], "nthu-chem1000": [29, 20], "nccu-ds205": [75, 51], "nthu-bmes1111": [29, 59], "nccu-lawtech": [84, 73], "nthu-econ101": [47, 80], "nccu-stats": [62, 69] };
-  const mapCourses = courses.filter((course) => positions[course.id]);
+  const mapCourses = featuredMapCourses.filter((course) => positions[course.id]);
 
   const loadMaps = async () => {
     try {
@@ -403,7 +488,7 @@ function RecommendationMap({ selected, setSelected, compare, toggleCompare, setC
 
   const saveMap = async () => {
     setMapStatus("儲存中…");
-    const response = await fetch("/api/maps", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: mapName, payload: { selectedId: selected.id, compareIds: compare.map((item) => item.id), courseIds: courses.map((course) => course.id) } }) });
+    const response = await fetch("/api/maps", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: mapName, payload: { selectedId: selected.id, compareIds: compare.map((item) => item.id), courseIds: featuredMapCourses.map((course) => course.id) } }) });
     setMapStatus(response.ok ? "已儲存到你的帳號" : "儲存失敗，請確認已登入");
     if (response.ok) { await loadMaps(); setHistoryOpen(true); }
   };
@@ -421,7 +506,7 @@ function RecommendationMap({ selected, setSelected, compare, toggleCompare, setC
   const openMap = (map: SavedMap) => {
     try {
       const payload = JSON.parse(map.payload) as { selectedId?: string };
-      const course = courses.find((item) => item.id === payload.selectedId);
+      const course = featuredMapCourses.find((item) => item.id === payload.selectedId);
       if (course) setSelected(course);
       setMapName(map.name);
       setMapStatus(`已載入「${map.name}」`);
@@ -439,7 +524,7 @@ function RecommendationMap({ selected, setSelected, compare, toggleCompare, setC
           <div className="absolute bottom-5 left-5 rounded-2xl border border-white/70 bg-white/75 px-4 py-3 text-[11px] text-[#64706c] shadow-sm backdrop-blur"><p className="font-bold text-[#283532]">地圖如何建立？</p><p className="mt-1">課程內容 40%・學習路徑 25%・個人偏好 20%・時段與限制 15%</p></div>
         </div>
         <aside className="rounded-[32px] border border-black/8 bg-white p-6 shadow-sm"><div className="flex items-center justify-between"><SchoolBadge school={selected.school} /><span className="text-xs font-bold text-[#8a938f]">{selected.code}</span></div><h3 className="mt-4 text-2xl font-bold tracking-tight">{selected.title}</h3><p className="mt-2 text-xs text-[#7c8582]">{selected.unit}</p><p className="mt-4 text-sm leading-6 text-[#56635f]">{selected.summary}</p><div className="my-6 h-px bg-black/8" /><h4 className="flex items-center gap-2 text-sm font-bold"><Network size={16} />關聯建立原因</h4>
-          <div className="mt-4 space-y-3">{connections.filter(([from, to]) => from === selected.id || to === selected.id).map(([from, to, score, reason]) => { const other = courses.find((course) => course.id === (from === selected.id ? to : from))!; return <button key={`${from}-${to}`} className="relation-row" onClick={() => setSelected(other)}><span className={`relation-dot ${other.school === "NTHU" ? "bg-[#7d5598]" : "bg-[#6370b7]"}`} /><span className="min-w-0 flex-1 text-left"><span className="block truncate text-xs font-bold">{other.title}</span><span className="mt-0.5 block truncate text-[10px] text-[#7c7582]">{reason}</span></span><span className="text-xs font-black text-[#76558f]">{score}</span></button>; })}</div>
+          <div className="mt-4 space-y-3">{connections.filter(([from, to]) => from === selected.id || to === selected.id).map(([from, to, score, reason]) => { const other = featuredMapCourses.find((course) => course.id === (from === selected.id ? to : from))!; return <button key={`${from}-${to}`} className="relation-row" onClick={() => setSelected(other)}><span className={`relation-dot ${other.school === "NTHU" ? "bg-[#7d5598]" : "bg-[#6370b7]"}`} /><span className="min-w-0 flex-1 text-left"><span className="block truncate text-xs font-bold">{other.title}</span><span className="mt-0.5 block truncate text-[10px] text-[#7c7582]">{reason}</span></span><span className="text-xs font-black text-[#76558f]">{score}</span></button>; })}</div>
           <div className="mt-6 rounded-2xl bg-[#f2f2f6] p-4"><p className="flex items-center gap-2 text-xs font-bold"><Info size={14} />推薦分數的用途</p><p className="mt-2 text-[11px] leading-5 text-[#706a76]">相似代表內容或學習路徑接近，不代表兩校正式認定可抵免。正式等價需由校方或人工審核。</p></div><div className="mt-5 grid grid-cols-2 gap-2"><button className={`rounded-xl border px-3 py-3 text-xs font-bold ${compare.some((item) => item.id === selected.id) ? "border-[#76558f] bg-[#76558f] text-white" : "border-black/10"}`} onClick={() => toggleCompare(selected)}>{compare.some((item) => item.id === selected.id) ? "已選為標的" : "選為比較標的"}</button><button className="rounded-xl bg-[#e9ebff] px-3 py-3 text-xs font-bold text-[#4f5eb3]" onClick={() => setCompareOpen(true)}>自行輸入比較</button></div>
         </aside>
       </div>
