@@ -171,7 +171,55 @@ const courses: Course[] = [
       { label: "跨校新穎性", value: 69, note: "兩校皆有相近基礎課，可優先比較時段" },
     ], source: "政大原型示範",
   },
+  {
+    id: "nthu-cs1356", school: "NTHU", code: "CS 1356", title: "程式設計二", titleEn: "Introduction to Programming (II)", unit: "資訊工程學系", credits: 3, level: "大學部", language: "中文", time: "二 Ta–Tc", teacher: "陳煥宗", tags: ["程式設計", "軟體開發", "運算思維"], summary: "延伸基礎程式設計，進入物件、模組與較完整的程式實作。", fit: 88, reasons: [{ label: "能力銜接", value: 95, note: "直接延續程式設計一" }, { label: "實作深度", value: 90, note: "增加較完整的程式專題" }, { label: "路徑重要性", value: 92, note: "銜接資料結構與軟體課程" }, { label: "時間適配", value: 76, note: "需確認晚間節次" }], source: "附件資料",
+  },
+  {
+    id: "nthu-cs2351", school: "NTHU", code: "CS 2351", title: "資料結構", titleEn: "Data Structures", unit: "資訊工程學系", credits: 3, level: "大學部", language: "中文", time: "二 10:10–12:00・四 10:10–11:00", teacher: "沈志亞", tags: ["程式設計", "資料結構", "演算法"], summary: "學習串列、樹、圖與雜湊等資料結構，建立演算法與軟體效能基礎。", fit: 90, reasons: [{ label: "能力銜接", value: 94, note: "承接程式設計基礎" }, { label: "路徑重要性", value: 97, note: "是演算法與系統課核心先備" }, { label: "實作深度", value: 91, note: "強調資料結構實作" }, { label: "時間適配", value: 82, note: "需確認週二、週四時段" }], source: "附件資料",
+  },
+  {
+    id: "nthu-cs4602", school: "NTHU", code: "CS 4602", title: "機器學習導論", titleEn: "Introduction to Machine Learning", unit: "資訊工程學系", credits: 3, level: "大學部", language: "中文", time: "二 10:10–12:00・四 10:10–11:00", teacher: "郭博智", tags: ["AI", "資料科學", "程式設計"], summary: "介紹監督式與非監督式學習，連結程式實作、資料分析與模型評估。", fit: 91, reasons: [{ label: "興趣相符", value: 96, note: "符合 AI 與資料科學偏好" }, { label: "能力銜接", value: 88, note: "需要程式與統計基礎" }, { label: "實作價值", value: 93, note: "可建立模型實作能力" }, { label: "時間適配", value: 82, note: "需確認週二、週四時段" }], source: "附件資料",
+  },
+  {
+    id: "nthu-aes4702", school: "NTHU", code: "AES 4702", title: "永續環境治理設計思考", titleEn: "Design Thinking for Sustainable Environmental Governance", unit: "分析與環境科學研究所", credits: 3, level: "大學部", language: "中文", time: "四 13:20–16:10", teacher: "陳俊明、周秀娟", tags: ["永續", "環境治理", "設計思考"], summary: "以設計思考處理永續治理問題，從利害關係人需求走向政策與方案原型。", fit: 93, reasons: [{ label: "興趣相符", value: 96, note: "直接連結永續與環境治理" }, { label: "跨域價值", value: 95, note: "融合政策與設計方法" }, { label: "實作深度", value: 89, note: "重視問題定義與方案原型" }, { label: "時間適配", value: 90, note: "週四下午完整時段" }], source: "附件資料",
+  },
+  {
+    id: "nthu-aes5203", school: "NTHU", code: "AES 5203", title: "環境化學", titleEn: "Environment Chemistry", unit: "分析與環境科學研究所", credits: 3, level: "研究所", language: "中文", time: "一 10:10–12:00・五 10:10–12:00", teacher: "董瑞安", tags: ["環境", "化學", "污染分析"], summary: "從化學反應與分析方法理解污染物在環境中的轉化、傳輸與風險。", fit: 87, reasons: [{ label: "領域相符", value: 95, note: "連結環境科學與化學" }, { label: "能力銜接", value: 90, note: "適合已有普通化學基礎" }, { label: "研究價值", value: 92, note: "可銜接污染分析研究" }, { label: "難度適配", value: 78, note: "研究所課程需評估先備" }], source: "附件資料",
+  },
+  {
+    id: "nthu-econ3040", school: "NTHU", code: "ECON 3040", title: "經濟資料分析與預測", titleEn: "Economic Data Analysis and Predictions", unit: "經濟學系", credits: 3, level: "大學部", language: "中文", time: "一 13:20–15:10", teacher: "游朝恩", tags: ["經濟", "資料科學", "量化方法"], summary: "以經濟資料進行整理、建模與預測，連結經濟判斷與實證分析。", fit: 86, reasons: [{ label: "能力銜接", value: 91, note: "結合經濟與資料分析" }, { label: "實作價值", value: 92, note: "強調資料與預測" }, { label: "跨域價值", value: 88, note: "可銜接政策分析" }, { label: "時間適配", value: 82, note: "週一下午時段" }], source: "附件資料",
+  },
+  {
+    id: "nthu-stat2622", school: "NTHU", code: "STAT 2622", title: "統計資料分析", titleEn: "Statistical Data Analysis", unit: "統計學研究所", credits: 3, level: "大學部", language: "中文", time: "二 13:20–14:10・四 13:20–15:10", teacher: "孫政宇", tags: ["統計", "資料科學", "量化方法"], summary: "從描述統計、推論到模型診斷，建立以真實資料回答問題的完整流程。", fit: 89, reasons: [{ label: "能力銜接", value: 94, note: "延伸統計學基礎" }, { label: "實作價值", value: 93, note: "聚焦真實資料分析" }, { label: "路徑重要性", value: 91, note: "支援資料科學與研究方法" }, { label: "時間適配", value: 84, note: "分散於週二、週四" }], source: "附件資料",
+  },
+  {
+    id: "nthu-lst3501", school: "NTHU", code: "LST 3501", title: "科技與法律", titleEn: "Law and Technology", unit: "科技法律研究所", credits: 2, level: "大學部", language: "中文", time: "四 10:10–12:00", teacher: "林勤富", tags: ["科技法律", "AI", "倫理"], summary: "從法律與制度觀點分析科技創新、資料使用與人工智慧帶來的責任問題。", fit: 85, reasons: [{ label: "跨域價值", value: 96, note: "連結科技與法律" }, { label: "興趣相符", value: 88, note: "符合 AI 社會影響偏好" }, { label: "閱讀挑戰", value: 78, note: "需要案例與法規閱讀" }, { label: "時間適配", value: 88, note: "週四上午時段" }], source: "附件資料",
+  },
+  {
+    id: "nthu-cs5605", school: "NTHU", code: "CS 5605", title: "AI 倫理、法律與社會", titleEn: "AI Ethics, Law and Society", unit: "資訊工程學系", credits: 2, level: "研究所", language: "中文", time: "五 10:10–12:00", teacher: "跨域師資", tags: ["AI", "科技法律", "倫理", "社會影響"], summary: "從工程、法律與社會觀點討論人工智慧的公平、責任、治理與風險。", fit: 90, reasons: [{ label: "興趣相符", value: 96, note: "直接命中 AI 社會影響" }, { label: "跨域價值", value: 97, note: "整合工程、法律與倫理" }, { label: "研究價值", value: 88, note: "適合進階議題探索" }, { label: "難度適配", value: 80, note: "研究所課程需評估背景" }], source: "附件資料",
+  },
+  {
+    id: "nthu-klst6206", school: "NTHU", code: "KLST 6206", title: "APP 設計與教育應用", titleEn: "APP Design and Educational Applications", unit: "學習科學與科技研究所", credits: 3, level: "研究所", language: "中文", time: "五 09:00–12:00", teacher: "唐文華", tags: ["APP", "程式設計", "互動設計"], semanticTerms: ["app", "mobile", "application", "行動應用", "應用程式"], summary: "以 APP 原型與互動設計回應教育情境需求，適合已有程式基礎的學生。", fit: 90, reasons: [{ label: "語意意圖", value: 99, note: "直接對應 APP 設計需求" }, { label: "能力銜接", value: 88, note: "建議先具備程式設計基礎" }, { label: "實作價值", value: 95, note: "產出可操作的應用原型" }, { label: "難度適配", value: 80, note: "研究所課程需評估背景" }], source: "附件資料",
+  },
 ];
+
+const domainRules: Record<string, string[]> = {
+  "程式與軟體": ["程式設計", "軟體開發", "運算思維", "資料結構", "演算法", "APP", "互動設計"],
+  "資料與 AI": ["資料科學", "AI", "統計", "量化方法"],
+  "環境與永續": ["永續", "環境治理", "環境", "污染分析"],
+  "政策、法律與治理": ["公共政策", "治理", "科技法律", "倫理", "社會影響"],
+  "經濟與決策": ["經濟", "決策", "量化方法"],
+  "化學與生醫": ["化學", "基礎科學", "實驗思維", "生醫", "生物"],
+};
+
+function courseDomains(course: Course) {
+  return Object.entries(domainRules).filter(([, keywords]) => keywords.some((keyword) => course.tags.includes(keyword))).map(([domain]) => domain);
+}
+
+function sharedDomains(a: Course, b: Course) {
+  const bDomains = new Set(courseDomains(b));
+  return courseDomains(a).filter((domain) => bDomains.has(domain));
+}
 
 const connections = [
   ["nthu-cs1001", "nccu-ds205", 88, "能力路徑：程式設計到資料應用"],
@@ -230,7 +278,12 @@ export default function Home() {
   }, [query, school, level, language]);
 
   const toggleCompare = (course: Course) => {
-    setCompare((current) => current.some((item) => item.id === course.id) ? current.filter((item) => item.id !== course.id) : [...current.slice(-1), course]);
+    setCompare((current) => {
+      if (current.some((item) => item.id === course.id)) return current.filter((item) => item.id !== course.id);
+      if (!current.length) return [course];
+      if (!sharedDomains(current[0], course).length) return current;
+      return [current[0], course];
+    });
   };
   const resetFilters = () => { setSchool("ALL"); setLevel("ALL"); setLanguage("ALL"); setQuery(""); };
 
@@ -336,6 +389,7 @@ function RecommendationMap({ selected, setSelected, compare, toggleCompare, setC
   const [historyOpen, setHistoryOpen] = useState(false);
   const [mapStatus, setMapStatus] = useState("");
   const positions: Record<string, [number, number]> = { "nthu-cs1001": [17, 43], "nthu-aes4701": [48, 38], "nccu-sust301": [69, 25], "nthu-chem1000": [29, 20], "nccu-ds205": [75, 51], "nthu-bmes1111": [29, 59], "nccu-lawtech": [84, 73], "nthu-econ101": [47, 80], "nccu-stats": [62, 69] };
+  const mapCourses = courses.filter((course) => positions[course.id]);
 
   const loadMaps = async () => {
     try {
@@ -381,7 +435,7 @@ function RecommendationMap({ selected, setSelected, compare, toggleCompare, setC
       </div>
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="map-canvas relative min-h-[620px] overflow-hidden rounded-[32px] border border-black/8"><div className="map-grid absolute inset-0" /><svg className="absolute inset-0 h-full w-full" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">{connections.map(([from, to, score]) => { const [x1, y1] = positions[from]; const [x2, y2] = positions[to]; const active = from === selected.id || to === selected.id; return <line key={`${from}-${to}`} x1={x1} y1={y1} x2={x2} y2={y2} vectorEffect="non-scaling-stroke" stroke={active ? "#726b85" : "#c2c1c9"} strokeWidth={active ? 2.2 : 1.2} strokeDasharray={score < 80 ? "5 5" : undefined} opacity={active ? .8 : .65} />; })}</svg>
-          {courses.map((course) => { const [x, y] = positions[course.id]; const active = course.id === selected.id; return <button key={course.id} className={`map-node ${course.school === "NTHU" ? "map-node-nthu" : "map-node-nccu"} ${active ? "map-node-active" : ""}`} style={{ left: `${x}%`, top: `${y}%` }} onClick={() => setSelected(course)}><span className="map-node-score">{course.fit}%</span><span className="map-node-title">{course.title}</span><span className="map-node-code">{schoolLabel[course.school]}・{course.code}</span></button>; })}
+          {mapCourses.map((course) => { const [x, y] = positions[course.id]; const active = course.id === selected.id; return <button key={course.id} className={`map-node ${course.school === "NTHU" ? "map-node-nthu" : "map-node-nccu"} ${active ? "map-node-active" : ""}`} style={{ left: `${x}%`, top: `${y}%` }} onClick={() => setSelected(course)}><span className="map-node-score">{course.fit}%</span><span className="map-node-title">{course.title}</span><span className="map-node-code">{schoolLabel[course.school]}・{course.code}</span></button>; })}
           <div className="absolute bottom-5 left-5 rounded-2xl border border-white/70 bg-white/75 px-4 py-3 text-[11px] text-[#64706c] shadow-sm backdrop-blur"><p className="font-bold text-[#283532]">地圖如何建立？</p><p className="mt-1">課程內容 40%・學習路徑 25%・個人偏好 20%・時段與限制 15%</p></div>
         </div>
         <aside className="rounded-[32px] border border-black/8 bg-white p-6 shadow-sm"><div className="flex items-center justify-between"><SchoolBadge school={selected.school} /><span className="text-xs font-bold text-[#8a938f]">{selected.code}</span></div><h3 className="mt-4 text-2xl font-bold tracking-tight">{selected.title}</h3><p className="mt-2 text-xs text-[#7c8582]">{selected.unit}</p><p className="mt-4 text-sm leading-6 text-[#56635f]">{selected.summary}</p><div className="my-6 h-px bg-black/8" /><h4 className="flex items-center gap-2 text-sm font-bold"><Network size={16} />關聯建立原因</h4>
@@ -396,11 +450,19 @@ function RecommendationMap({ selected, setSelected, compare, toggleCompare, setC
 function CompareModal({ courses, allCourses, setCourses, close, remove }: { courses: Course[]; allCourses: Course[]; setCourses: React.Dispatch<React.SetStateAction<Course[]>>; close: () => void; remove: (course: Course) => void }) {
   const [targets, setTargets] = useState([courses[0]?.title ?? "", courses[1]?.title ?? ""]);
   const [chosen, setChosen] = useState<[Course | null, Course | null]>([courses[0] ?? null, courses[1] ?? null]);
+  const compatibleWithA = chosen[0] ? allCourses.filter((course) => course.id !== chosen[0]?.id && sharedDomains(chosen[0]!, course).length > 0) : [];
   const chooseTarget = (index: number, value: string) => {
     setTargets((items) => items.map((item, itemIndex) => itemIndex === index ? value : item));
     const normalized = value.trim().toLowerCase();
-    const match = allCourses.find((course) => course.title.toLowerCase() === normalized || course.code.toLowerCase() === normalized || `${course.title}｜${schoolLabel[course.school]}・${course.code}`.toLowerCase() === normalized);
+    const available = index === 0 ? allCourses : compatibleWithA;
+    const match = available.find((course) => course.title.toLowerCase() === normalized || course.code.toLowerCase() === normalized || `${course.title}｜${schoolLabel[course.school]}・${course.code}`.toLowerCase() === normalized);
     if (!match) return;
+    if (index === 0) {
+      setChosen([match, null]);
+      setTargets([value, ""]);
+      setCourses([match]);
+      return;
+    }
     setChosen((items) => {
       if (items.some((item, itemIndex) => item?.id === match.id && itemIndex !== index)) return items;
       const next: [Course | null, Course | null] = [...items];
@@ -411,13 +473,19 @@ function CompareModal({ courses, allCourses, setCourses, close, remove }: { cour
   };
   const selectedCourses = chosen.filter((item): item is Course => Boolean(item));
   const removeTarget = (course: Course) => {
-    setChosen((items) => items.map((item) => item?.id === course.id ? null : item) as [Course | null, Course | null]);
-    setTargets((items) => items.map((item, index) => chosen[index]?.id === course.id ? "" : item));
+    if (chosen[0]?.id === course.id) {
+      setChosen([null, null]);
+      setTargets(["", ""]);
+      setCourses([]);
+      return;
+    }
+    setChosen([chosen[0], null]);
+    setTargets([targets[0], ""]);
     remove(course);
   };
-  const overlap = selectedCourses.length === 2 ? selectedCourses[0].tags.filter((tag) => selectedCourses[1].tags.includes(tag)) : [];
+  const overlap = selectedCourses.length === 2 ? sharedDomains(selectedCourses[0], selectedCourses[1]) : [];
   return <div className="fixed inset-0 z-50 grid place-items-center bg-[#211a29]/45 p-4 backdrop-blur-sm" onMouseDown={close}><div className="compare-modal max-h-[90vh] w-full max-w-5xl overflow-auto rounded-[30px] shadow-2xl" onMouseDown={(event) => event.stopPropagation()}><div className="compare-header sticky top-0 z-10 flex items-center justify-between border-b px-6 py-5 backdrop-blur"><div><p className="text-[10px] font-bold uppercase tracking-[.17em] text-[#89828f]">Course comparison</p><h2 className="mt-1 text-xl font-bold">自行選擇比較標的</h2></div><button className="grid h-9 w-9 place-items-center rounded-full border border-black/10 bg-white" onClick={close}><X size={17} /></button></div>
-    <div className="border-b px-5 py-5 sm:px-7"><p className="mb-3 text-xs leading-5 text-[#726b78]">輸入課名或課號，選擇你真正想比較的兩門課；系統不會再自動配對不相關課程。</p><div className="grid gap-3 md:grid-cols-2">{[0, 1].map((index) => <label key={index} className="compare-target"><span>比較標的 {index === 0 ? "A" : "B"}</span><input list={`course-options-${index}`} placeholder="輸入課名或課號…" value={targets[index]} onChange={(event) => chooseTarget(index, event.target.value)} /><datalist id={`course-options-${index}`}>{allCourses.map((course) => <option key={course.id} value={`${course.title}｜${schoolLabel[course.school]}・${course.code}`} />)}</datalist></label>)}</div></div>
-    {selectedCourses.length < 2 ? <div className="px-6 py-14 text-center"><GitCompareArrows className="mx-auto text-[#aaa3ae]" /><h3 className="mt-3 font-bold">請輸入兩門要比較的課程</h3><p className="mt-1 text-sm text-[#7b7480]">例如：環境科學與工程、永續發展與公共政策。</p></div> : overlap.length === 0 ? <div className="px-6 py-14 text-center"><CircleHelp className="mx-auto text-[#8b6aa3]" /><h3 className="mt-3 font-bold">這兩門課不適合直接比較</h3><p className="mx-auto mt-2 max-w-xl text-sm leading-6 text-[#706878]">「{selectedCourses[0].title}」與「{selectedCourses[1].title}」沒有共同課程主題，因此不建立比較表。請更換其中一個標的，選擇內容或學習目標相近的課程。</p></div> : <div className="p-5 sm:p-7"><div className="grid grid-cols-[120px_repeat(2,minmax(0,1fr))] gap-x-4 gap-y-0 text-sm max-sm:grid-cols-[88px_repeat(2,minmax(0,1fr))]"><div />{selectedCourses.map((course) => <div key={course.id} className="relative rounded-2xl bg-white p-4 shadow-sm"><button className="absolute right-3 top-3 text-[#98919d]" onClick={() => removeTarget(course)}><X size={14} /></button><SchoolBadge school={course.school} /><h3 className="mt-3 font-bold leading-5">{course.title}</h3><p className="mt-1 text-[10px] text-[#7c7582]">{course.code}</p><p className="mt-4 text-3xl font-black text-[#76558f]">{course.fit}<span className="text-xs">%</span></p></div>)}<CompareRow label="學分" values={selectedCourses.map((course) => `${course.credits} 學分`)} /><CompareRow label="系所" values={selectedCourses.map((course) => course.unit)} /><CompareRow label="時間" values={selectedCourses.map((course) => course.time)} /><CompareRow label="語言" values={selectedCourses.map((course) => course.language)} /><CompareRow label="核心主題" values={selectedCourses.map((course) => course.tags.join("、"))} /><CompareRow label="定位" values={selectedCourses.map((course) => course.summary)} tall /></div><div className="mt-6 rounded-2xl border border-[#d8c8e3] bg-[#f7f1fb] p-5"><p className="flex items-center gap-2 text-sm font-bold"><Sparkles size={16} className="text-[#76558f]" />比較判讀</p><p className="mt-2 text-sm leading-6 text-[#625a68]">兩門課共有「{overlap.join("、")}」主題，可進一步比較課程內容、學分與時段。</p><p className="mt-2 text-[11px] text-[#847b8b]">比較結果不等同正式學分抵免認定。</p></div></div>}</div></div>;
+    <div className="border-b px-5 py-5 sm:px-7"><p className="mb-3 text-xs leading-5 text-[#726b78]">先輸入標的 A。標的 B 只會顯示與 A 有共同主題或學習路徑的課程。</p><div className="grid gap-3 md:grid-cols-2">{[0, 1].map((index) => { const options = index === 0 ? allCourses : compatibleWithA; return <label key={index} className="compare-target"><span>比較標的 {index === 0 ? `A・全部 ${allCourses.length} 門` : `B・相容 ${options.length} 門`}</span><input list={`course-options-${index}`} placeholder={index === 0 ? "先輸入課名或課號…" : chosen[0] ? "只顯示可比較課程…" : "請先選擇標的 A"} value={targets[index]} disabled={index === 1 && !chosen[0]} onChange={(event) => chooseTarget(index, event.target.value)} /><datalist id={`course-options-${index}`}>{options.map((course) => <option key={course.id} value={`${course.title}｜${schoolLabel[course.school]}・${course.code}`} />)}</datalist></label>; })}</div>{chosen[0] && <p className="mt-3 text-[11px] text-[#7b7480]">依「{courseDomains(chosen[0]).join("、")}」篩選，已隱藏 {allCourses.length - compatibleWithA.length - 1} 門不相容課程。</p>}</div>
+    {selectedCourses.length < 2 || overlap.length === 0 ? <div className="px-6 py-14 text-center"><GitCompareArrows className="mx-auto text-[#aaa3ae]" /><h3 className="mt-3 font-bold">{selectedCourses.length === 2 ? "目前的標的 B 與 A 不相容，請重新選擇" : chosen[0] ? `請從 ${compatibleWithA.length} 門相容課程選擇標的 B` : "請先輸入比較標的 A"}</h3><p className="mt-1 text-sm text-[#7b7480]">不相容的課程已從標的 B 選項中移除。</p></div> : <div className="p-5 sm:p-7"><div className="grid grid-cols-[120px_repeat(2,minmax(0,1fr))] gap-x-4 gap-y-0 text-sm max-sm:grid-cols-[88px_repeat(2,minmax(0,1fr))]"><div />{selectedCourses.map((course) => <div key={course.id} className="relative rounded-2xl bg-white p-4 shadow-sm"><button className="absolute right-3 top-3 text-[#98919d]" onClick={() => removeTarget(course)}><X size={14} /></button><SchoolBadge school={course.school} /><h3 className="mt-3 font-bold leading-5">{course.title}</h3><p className="mt-1 text-[10px] text-[#7c7582]">{course.code}</p><p className="mt-4 text-3xl font-black text-[#76558f]">{course.fit}<span className="text-xs">%</span></p></div>)}<CompareRow label="學分" values={selectedCourses.map((course) => `${course.credits} 學分`)} /><CompareRow label="系所" values={selectedCourses.map((course) => course.unit)} /><CompareRow label="時間" values={selectedCourses.map((course) => course.time)} /><CompareRow label="語言" values={selectedCourses.map((course) => course.language)} /><CompareRow label="核心主題" values={selectedCourses.map((course) => course.tags.join("、"))} /><CompareRow label="定位" values={selectedCourses.map((course) => course.summary)} tall /></div><div className="mt-6 rounded-2xl border border-[#d8c8e3] bg-[#f7f1fb] p-5"><p className="flex items-center gap-2 text-sm font-bold"><Sparkles size={16} className="text-[#76558f]" />比較判讀</p><p className="mt-2 text-sm leading-6 text-[#625a68]">兩門課共有「{overlap.join("、")}」學習領域，可進一步比較課程內容、學分與時段。</p><p className="mt-2 text-[11px] text-[#847b8b]">比較結果不等同正式學分抵免認定。</p></div></div>}</div></div>;
 }
 function CompareRow({ label, values, tall = false }: { label: string; values: string[]; tall?: boolean }) { return <><div className={`border-b border-black/7 py-4 text-xs font-bold text-[#6c7672] ${tall ? "leading-6" : ""}`}>{label}</div>{values.map((value, index) => <div key={`${label}-${index}`} className={`border-b border-black/7 py-4 text-xs leading-5 text-[#46534f] ${tall ? "min-h-28" : ""}`}>{value}</div>)}</>; }
