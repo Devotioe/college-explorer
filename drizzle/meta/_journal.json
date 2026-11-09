@@ -1,5 +1,13 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "entries": []
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1794211043131,
+      "tag": "0000_silly_apocalypse",
+      "breakpoints": true
+    }
+  ]
 }
