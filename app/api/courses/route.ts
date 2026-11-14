@@ -18,9 +18,9 @@ export async function GET(request: Request) {
   const clauses: string[] = [];
   const bindings: unknown[] = [];
   if (query) {
-    clauses.push("(lower(c.title_zh) LIKE ? OR lower(c.title_en) LIKE ? OR lower(c.code) LIKE ? OR lower(c.department) LIKE ? OR lower(c.topics) LIKE ?)");
+    clauses.push("(lower(c.title_zh) LIKE ? OR lower(c.title_en) LIKE ? OR lower(c.code) LIKE ? OR lower(c.department) LIKE ? OR lower(c.topics) LIKE ? OR lower(coalesce(c.description, '')) LIKE ? OR lower(coalesce(c.objectives, '')) LIKE ?)");
     const like = `%${query}%`;
-    bindings.push(like, like, like, like, like);
+    bindings.push(like, like, like, like, like, like, like);
   }
   if (school) { clauses.push("c.school = ?"); bindings.push(school); }
   if (level) { clauses.push("c.level = ?"); bindings.push(level); }
@@ -30,7 +30,10 @@ export async function GET(request: Request) {
   const countRow = await env.DB.prepare(`SELECT count(*) AS total ${baseJoin} ${where}`).bind(...bindings).first<{ total: number }>();
   const rows = await env.DB.prepare(`
     SELECT c.id, c.school, c.code, c.title_zh AS titleZh, c.title_en AS titleEn,
-      c.department, c.credits, c.level, c.topics, o.semester, o.teacher,
+      c.department, c.credits, c.level, c.topics,
+      substr(coalesce(c.description, ''), 1, 600) AS description,
+      substr(coalesce(c.objectives, ''), 1, 600) AS objectives,
+      o.semester, o.teacher,
       o.language, o.schedule, o.capacity
     ${baseJoin} ${where}
     ORDER BY c.school, c.code

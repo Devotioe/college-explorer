@@ -24,7 +24,15 @@ function readableChinese(value) {
 }
 
 function clean(value) {
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  return typeof value === "string" ? value
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ").trim() : "";
 }
 
 function extractAfterTabs(value) {
@@ -51,7 +59,12 @@ for (const row of source) {
   if (!topics.length) topics.push("其他領域");
   if (!courseMap.has(id)) {
     courseMap.set(id, {
-      course: { id, school: "NTHU", code, titleZh, titleEn, department, credits, level, topics },
+      course: {
+        id, school: "NTHU", code, titleZh, titleEn, department, credits, level, topics,
+        prerequisites: [clean(values[13]), clean(values[14])].filter(Boolean).join("｜"),
+        requirement: clean(values[18]),
+        syllabusSource: "清大官方每日開放課程資料",
+      },
       offerings: [],
     });
   }
@@ -65,19 +78,6 @@ for (const row of source) {
     schedule: extractAfterTabs(values[11]),
     capacity: Number(values[4]) || null,
     source: "open_course_data.json",
-  });
-}
-
-const nccuPrototypeCourses = [
-  { id: "nccu-sust301", code: "SUST 301", titleZh: "永續發展與公共政策", titleEn: "Sustainable Development and Public Policy", department: "公共行政學系", credits: 3, topics: ["環境與永續", "政策、法律與治理"] },
-  { id: "nccu-ds205", code: "DS 205", titleZh: "資料科學與社會", titleEn: "Data Science and Society", department: "資訊科學系", credits: 3, topics: ["資料與 AI", "政策、法律與治理"] },
-  { id: "nccu-law328", code: "LAW 328", titleZh: "科技、法律與社會", titleEn: "Technology, Law and Society", department: "法律學系", credits: 2, topics: ["政策、法律與治理", "資料與 AI"] },
-  { id: "nccu-stat201", code: "STAT 201", titleZh: "統計學", titleEn: "Statistics", department: "統計學系", credits: 3, topics: ["資料與 AI"] },
-];
-for (const item of nccuPrototypeCourses) {
-  courseMap.set(item.id, {
-    course: { ...item, school: "NCCU", level: "大學部" },
-    offerings: [{ id: `11510${item.code.replace(/\s+/g, "")}00`, courseId: item.id, semester: "11510", section: "00", teacher: "原型示範教師", language: "中文", schedule: "待確認", capacity: null, source: "NCCU prototype" }],
   });
 }
 
