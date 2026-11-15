@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "課徑｜跨校課程推薦地圖",
-  description: "清大與政大課程搜尋、個人化推薦、相似課比較與推薦地圖互動原型。",
+  title: "課徑｜政大成績單與課程推薦",
+  description: "政大成績單辨識、修課紀錄確認、個人化課程推薦與學習地圖。",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

@@ -15,6 +15,20 @@
       "when": 1794214078830,
       "tag": "0001_lethal_gressill",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1794667367010,
+      "tag": "0002_sloppy_risque",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1794669482473,
+      "tag": "0003_fearless_unicorn",
+      "breakpoints": true
     }
   ]
 }
