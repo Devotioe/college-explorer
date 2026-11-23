@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { NextResponse } from "next/server";
+import { getCoursePrerequisites } from "../../../lib/course-detail-text";
 
 function numberParam(value: string | null, fallback: number, min: number, max: number) {
   const parsed = Number(value);
@@ -30,7 +31,7 @@ export async function GET(request: Request) {
   const countRow = await env.DB.prepare(`SELECT count(*) AS total ${baseJoin} ${where}`).bind(...bindings).first<{ total: number }>();
   const rows = await env.DB.prepare(`
     SELECT c.id, c.school, c.code, c.title_zh AS titleZh, c.title_en AS titleEn,
-      c.department, c.credits, c.level, c.topics,
+      c.department, c.credits, c.level, c.topics, c.prerequisites,
       substr(coalesce(c.description, ''), 1, 600) AS description,
       substr(coalesce(c.objectives, ''), 1, 600) AS objectives,
       o.semester, o.teacher,
@@ -40,7 +41,7 @@ export async function GET(request: Request) {
     LIMIT ? OFFSET ?
   `).bind(...bindings, pageSize, (page - 1) * pageSize).all();
   return NextResponse.json({
-    courses: rows.results,
+    courses: rows.results.map((row) => ({ ...row, prerequisites: getCoursePrerequisites(String(row.id), row.prerequisites) })),
     pagination: { page, pageSize, total: Number(countRow?.total ?? 0), pages: Math.ceil(Number(countRow?.total ?? 0) / pageSize) },
   });
 }

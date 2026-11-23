@@ -1,5 +1,8 @@
 import { env } from "cloudflare:workers";
 import { NextResponse } from "next/server";
+import { getCourseDetailText, getCoursePrerequisites, getReviewedCourseHighlights } from "../../../../lib/course-detail-text";
+import { summarizeCourseText } from "../../../../lib/course-highlights";
+import { reviewsForCourse, teacherReviewsForCourse } from "../../../../lib/student-reviews";
 
 type Context = { params: Promise<{ id: string }> };
 export async function GET(_request: Request, context: Context) {
@@ -20,16 +23,21 @@ export async function GET(_request: Request, context: Context) {
   if (!row) return NextResponse.json({ error: "找不到課程" }, { status: 404 });
   let offeredTerms: string[] = [];
   try { offeredTerms = JSON.parse(String(row.offeredTermsJson || "[]")); } catch { offeredTerms = row.semester ? [String(row.semester)] : []; }
+  const courseText = getCourseDetailText(id, row);
+  const highlights = getReviewedCourseHighlights(id, courseText)
+    ?? summarizeCourseText(courseText.description, courseText.objectives);
   return NextResponse.json({
     course: {
       ...row,
-      description: row.description || "目前資料來源未提供完整課程簡介，請至校方課程系統確認。",
-      objectives: row.objectives || "",
-      prerequisites: row.prerequisites || "",
+      ...courseText,
+      ...highlights,
+      prerequisites: getCoursePrerequisites(id, row.prerequisites),
       offeredTerms,
       syllabusSource: row.syllabusSource || "",
       syllabusUrl: row.syllabusUrl || "",
       requirement: row.requirement || "",
+      reviews: row.school === "NCCU" ? reviewsForCourse(id) : [],
+      teacherReviews: row.school === "NCCU" ? teacherReviewsForCourse(id) : [],
     },
   });
 }
