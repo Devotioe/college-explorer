@@ -22,11 +22,12 @@
 - 互動式課程地圖，將官方先修或建議銜接課程連到目前目標
 - 亮色／暗色主題與響應式版面
 - Cloudflare D1 課程資料與分批 bootstrap
-- ChatGPT 登入使用者的推薦地圖儲存、載入、改名及刪除
+- 使用網站 Email 帳號儲存、載入、改名及刪除學習路徑
 - Email／密碼註冊、登入與安全工作階段（PBKDF2 + HttpOnly cookie）
 - 政大成績單 PDF／圖片 OCR、課程比對、人工確認與保存
 - 依政大成績單統計各學院與系所的修課門數，並依明確的最多修課分類顯示對應稱號
 - 課程詳情優先顯示課程簡介與學習成效重點，可展開原文
+- 政大開課班次按學期列出完整課號、教師、授課語言與時間，並可用班次課號搜尋
 - 政大課程詳情依教師整理多篇 Dcard 修課心得，顯示教學、作業、評量、修課建議和原文連結
 - 課程、開課班次、主題與推薦地圖的 Drizzle schema/migrations
 
@@ -39,7 +40,6 @@
 - Tailwind CSS / shadcn UI
 - Cloudflare Workers + D1
 - Drizzle ORM
-- ChatGPT sign-in identity headers for user-owned maps
 
 主要 API：
 
@@ -62,7 +62,7 @@ npm run install:ci
 npm run dev
 ```
 
-開發伺服器預設使用 `http://127.0.0.1:5173`。本機可開啟以下路徑模擬 ChatGPT 登入：
+開發伺服器預設使用 `http://127.0.0.1:5173`。地圖優先使用網站 Email 帳號的工作階段。以 ChatGPT 身分保存的舊地圖，在只使用原身分登入時仍可存取。本機可開啟以下路徑模擬舊有的 ChatGPT 登入：
 
 ```text
 /signin-with-chatgpt?return_to=/
@@ -84,6 +84,12 @@ node scripts/refresh-nthu-course-syllabi.mjs
 課程詳情 API 提供原文 `description`、`objectives`，以及可供之後文字比對的 `descriptionPoints`、`objectivePoints`。頁面優先顯示人工整理的重點，其餘課程從來源文字擷取重點，同時提供原文。清大部分學習成效來自完整課程大綱，只有能從資料辨認的成效會列為重點。
 
 更新政大課程原文時，從來源 CSV 重建資料。同步核對 `data/course-highlights.json` 內相關課程的人工重點。
+
+## 政大開課班次
+
+`data/nccu-offerings.json` 收錄現有政大課程目錄在 111-1 至 115-1 的官方開課班次。網站以這份快照補足代表課號，課程介紹與修課心得仍以原課程 ID 讀取。課表有異動時可執行 `node scripts/refresh-nccu-offerings.mjs` 更新快照。若只需重跑配對並沿用已下載的分院資料，可加上 `--reuse-cache`。
+
+資料來源為政大[全校課程查詢系統](https://qrysub.nccu.edu.tw/)及教務處的[節次時間對照表](https://aca.nccu.edu.tw/zh/%E9%81%B8%E8%AA%B2%E8%A8%8A%E6%81%AF/%E8%AA%B2%E7%A8%8B%E8%B3%87%E8%A8%8A-1/%E5%90%84%E7%AF%80%E6%AC%A1%E4%B8%8A%E8%AA%B2%E6%99%82%E9%96%93%E5%B0%8D%E7%85%A7%E8%A1%A8?tmpl=component)。
 
 ```bash
 node scripts/build-nccu-course-index.mjs

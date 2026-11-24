@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { NextResponse } from "next/server";
 import { getCourseDetailText, getCoursePrerequisites, getReviewedCourseHighlights } from "../../../../lib/course-detail-text";
 import { summarizeCourseText } from "../../../../lib/course-highlights";
+import { getNccuOfferings } from "../../../../lib/nccu-offerings";
 import { reviewsForCourse, teacherReviewsForCourse } from "../../../../lib/student-reviews";
 
 type Context = { params: Promise<{ id: string }> };
@@ -33,6 +34,7 @@ export async function GET(_request: Request, context: Context) {
       ...highlights,
       prerequisites: getCoursePrerequisites(id, row.prerequisites),
       offeredTerms,
+      offerings: getNccuOfferings(id),
       syllabusSource: row.syllabusSource || "",
       syllabusUrl: row.syllabusUrl || "",
       requirement: row.requirement || "",

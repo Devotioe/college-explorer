@@ -34,8 +34,10 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { buildCourseMapBranches, type CourseMapBranch } from "../lib/course-map";
+import { normalizeNccuCourseCode } from "../lib/nccu-course-code.mjs";
+import type { NccuOffering } from "../lib/nccu-offerings";
 import { buildNccuStudyProfile } from "../lib/nccu-study-profile";
 import type { ReviewDetails, TeacherReviewGroup } from "../lib/student-reviews";
 import { initialTheme, readStoredTheme, type Theme } from "../lib/theme";
@@ -61,6 +63,8 @@ type Course = {
   semanticTerms?: string[];
   summary: string;
   prerequisites?: string;
+  offeringCodes?: string[];
+  latestOfferingTerm?: string;
   fit: number;
   reasons: { label: string; value: number; note: string }[];
   source: "附件資料" | "清大官方開放課程資料" | "政大課程資料" | "原型語意示範";
@@ -243,7 +247,7 @@ function sharedDomains(a: Course, b: Course) {
 type ApiCourse = {
   id: string; school: School; code: string; titleZh: string; titleEn: string; department: string;
   credits: number; level: Course["level"]; topics: string; teacher?: string; language?: string;
-  schedule?: string; semester?: string; description?: string; objectives?: string; prerequisites?: string;
+  schedule?: string; semester?: string; description?: string; objectives?: string; prerequisites?: string; offeringCodes?: string[]; latestOfferingTerm?: string;
 };
 
 function apiCourseToCourse(item: ApiCourse): Course {
@@ -273,6 +277,8 @@ function apiCourseToCourse(item: ApiCourse): Course {
     semanticTerms: [item.titleEn, item.description ?? "", item.objectives ?? "", ...tags],
     summary: item.description?.trim() || `${item.titleEn || title}，${item.department}於 ${item.semester || "歷年"} 學期開設。`,
     prerequisites: item.prerequisites ?? undefined,
+    offeringCodes: item.offeringCodes,
+    latestOfferingTerm: item.latestOfferingTerm,
     fit,
     reasons: [
       { label: "課程內容（40%）", value: contentScore, note: hasPreferredTopic ? `命中目前偏好：${tags.join("、")}` : `目前分類為${tags.join("、")}` },
@@ -305,8 +311,9 @@ export default function Home() {
   const [compareOpen, setCompareOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>(initialTheme);
   const [account, setAccount] = useState<Account | null>(null);
-  const [authOpen, setAuthOpen] = useState(false);
+  const [authPurpose, setAuthPurpose] = useState<"transcript" | "map" | null>(null);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
+  const [mapName, setMapName] = useState("我的學習路徑");
   const [courseDetailsOpen, setCourseDetailsOpen] = useState<Course | null>(null);
   const [saveNotice, setSaveNotice] = useState<number | null>(null);
   const [transcriptCourses, setTranscriptCourses] = useState<TranscriptRow[]>([]);
@@ -389,10 +396,13 @@ export default function Home() {
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
+    const code = normalizeNccuCourseCode(q);
     return catalogCourses.filter((course) => {
       const literal = [course.title, course.titleEn, course.code, course.unit, ...course.tags].join(" ").toLowerCase();
       const semantic = (course.semanticTerms ?? []).join(" ").toLowerCase();
-      const matchesQuery = !q || literal.includes(q) || semantic.includes(q);
+      const matchesOfferingCode = code && course.school === "NCCU"
+        && (course.code === code || course.offeringCodes?.includes(code));
+      const matchesQuery = !q || literal.includes(q) || semantic.includes(q) || matchesOfferingCode;
       return matchesQuery && (school === "ALL" || course.school === school) && (level === "ALL" || course.level === level) && (language === "ALL" || course.language === language);
     }).sort((a, b) => b.fit - a.fit || a.title.localeCompare(b.title, "zh-Hant"));
   }, [catalogCourses, query, school, level, language]);
@@ -417,6 +427,7 @@ export default function Home() {
     await fetch("/api/auth/logout", { method: "POST" });
     setAccount(null);
     setTranscriptCourses([]);
+    setMapName("我的學習路徑");
     setTranscriptOpen(false);
   };
 
@@ -441,7 +452,7 @@ export default function Home() {
           {account ? <>
             <button className="account-upload-button" onClick={() => setTranscriptOpen(true)}><UploadCloud size={16} /><span className="hidden lg:inline">上傳成績單</span></button>
             <div className="account-chip"><span className="account-avatar"><UserRound size={14} /></span><span className="hidden max-w-28 truncate xl:block">{account.displayName}</span><button aria-label="登出" title="登出" onClick={logout}><LogOut size={14} /></button></div>
-          </> : <button className="account-login-button" onClick={() => setAuthOpen(true)}><LogIn size={16} /><span>登入 / 註冊</span></button>}
+          </> : <button className="account-login-button" onClick={() => setAuthPurpose("transcript")}><LogIn size={16} /><span>登入 / 註冊</span></button>}
         </div>
       </header>
 
@@ -476,14 +487,14 @@ export default function Home() {
             <div>
               <div className="mb-4 flex items-end justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#89918e]">Personalized discovery</p><h2 className="mt-1 text-2xl font-bold tracking-tight">為你挑選的課程</h2></div><button className="flex items-center gap-2 rounded-xl border border-black/10 bg-white px-3 py-2 text-xs font-bold xl:hidden" onClick={() => setFiltersOpen((open) => !open)}><SlidersHorizontal size={15} /> 篩選</button></div>
               <div className="mb-4 flex flex-wrap gap-2"><span className="filter-summary"><University size={13} />{school === "ALL" ? "兩校" : schoolLabel[school]}</span><span className="filter-summary"><GraduationCap size={13} />{level === "ALL" ? "所有層級" : level}</span><span className="filter-summary"><Languages size={13} />{language === "ALL" ? "所有語言" : language}</span><span className="ml-auto self-center text-xs text-[#6d7773]">{catalogStatus}・符合 {filtered.length.toLocaleString("zh-TW")} 門</span></div>
-              {query.trim() && filtered.some((course) => !(course.title + course.titleEn + course.code + course.unit + course.tags.join("")).toLowerCase().includes(query.trim().toLowerCase())) && <div className="semantic-hint mb-4 flex items-start gap-2 rounded-2xl border px-4 py-3 text-xs leading-5"><Sparkles size={15} className="mt-0.5 shrink-0" /><span><strong>語意延伸：</strong>「{query.trim()}」可能代表應用開發需求，因此也推薦沒有相同字面的基礎課程。</span></div>}
+              {query.trim() && !normalizeNccuCourseCode(query) && filtered.some((course) => !(course.title + course.titleEn + course.code + course.unit + course.tags.join("")).toLowerCase().includes(query.trim().toLowerCase())) && <div className="semantic-hint mb-4 flex items-start gap-2 rounded-2xl border px-4 py-3 text-xs leading-5"><Sparkles size={15} className="mt-0.5 shrink-0" /><span><strong>語意延伸：</strong>「{query.trim()}」可能代表應用開發需求，因此也推薦沒有相同字面的基礎課程。</span></div>}
               <div className="grid gap-4 lg:grid-cols-2">
                 {visibleCourses.map((course) => (
                   <article key={course.id} className={`course-card group ${selected.id === course.id ? "course-card-selected" : ""}`} onClick={() => openCourse(course)}>
                     <div className="flex items-start justify-between gap-3"><div className="flex items-center gap-2"><SchoolBadge school={course.school} /><span className="text-[11px] font-bold tracking-wide text-[#7d8783]">{course.code}</span></div><button aria-label="收藏課程" className={`icon-button ${saved.includes(course.id) ? "icon-button-saved" : ""}`} onClick={(event) => { event.stopPropagation(); setSaved((items) => items.includes(course.id) ? items.filter((id) => id !== course.id) : [...items, course.id]); }}><Heart size={16} fill={saved.includes(course.id) ? "currentColor" : "none"} /></button></div>
                     <h3 className="mt-4 text-lg font-bold tracking-tight"><button type="button" className="block w-full text-left" onClick={(event) => { event.stopPropagation(); openCourse(course); }}>{course.title}</button></h3><p className="mt-1 line-clamp-1 text-xs text-[#77817d]">{course.titleEn}</p><p className="mt-3 line-clamp-2 text-sm leading-6 text-[#53605c]">{course.summary}</p>
                     <div className="mt-4 flex flex-wrap gap-1.5">{course.tags.map((tag) => <span key={tag} className="tag">{tag}</span>)}</div>
-                    <div className="mt-5 space-y-1 border-t border-black/7 pt-4 text-[11px] text-[#6d6872]"><p className="flex items-center gap-1.5"><Clock3 size={12} />{course.time}</p><p className="flex items-center gap-1.5"><BookOpen size={12} />{course.credits} 學分・{course.unit}</p></div>
+                    <div className="mt-5 space-y-1 border-t border-black/7 pt-4 text-[11px] text-[#6d6872]"><p className="flex items-center gap-1.5"><Clock3 size={12} />{course.latestOfferingTerm ? `${course.latestOfferingTerm} 開課・查看分班時間` : course.time}</p><p className="flex items-center gap-1.5"><BookOpen size={12} />{course.credits} 學分・{course.unit}</p></div>
                   </article>
                 ))}
               </div>
@@ -492,21 +503,29 @@ export default function Home() {
             </div>
           </section>
         ) : <>
-          <StudyProfilePanel profile={studyProfile} openTranscript={() => account ? setTranscriptOpen(true) : setAuthOpen(true)} />
-          <RecommendationMap selected={selected} setSelected={setSelected} compare={compare}
-            catalog={catalogCourses} branches={mapBranches} />
+          <StudyProfilePanel profile={studyProfile} openTranscript={() => account ? setTranscriptOpen(true) : setAuthPurpose("transcript")} />
+          <RecommendationMap key={account?.id ?? "guest"} selected={selected} setSelected={setSelected} compare={compare}
+            catalog={catalogCourses} branches={mapBranches} mapName={mapName} setMapName={setMapName}
+            openSignIn={() => setAuthPurpose("map")} />
         </>}
       </div>
       {compareOpen && <CompareModal courses={compare} allCourses={catalogCourses} setCourses={setCompare} close={() => setCompareOpen(false)} remove={(course) => setCompare((items) => items.filter((item) => item.id !== course.id))} />}
-      {authOpen && <AuthDialog close={() => setAuthOpen(false)} onAuthenticated={(user) => { setAccount(user); setAuthOpen(false); setTranscriptOpen(true); }} />}
+      {authPurpose && <AuthDialog purpose={authPurpose} close={() => setAuthPurpose(null)} onAuthenticated={(user) => {
+        setAccount(user);
+        setAuthPurpose(null);
+        if (authPurpose === "transcript") setTranscriptOpen(true);
+      }} />}
       {transcriptOpen && account && <TranscriptDialog account={account} close={() => setTranscriptOpen(false)} onSaved={(count) => { setTranscriptOpen(false); setSaveNotice(count); setTranscriptRefresh((value) => value + 1); }} />}
-      {courseDetailsOpen && <CourseDetailsModal key={courseDetailsOpen.id} course={courseDetailsOpen} close={() => setCourseDetailsOpen(null)} />}
+      {courseDetailsOpen && <CourseDetailsModal key={courseDetailsOpen.id} course={courseDetailsOpen}
+        requestedCode={view === "discover" ? normalizeNccuCourseCode(query) : ""} close={() => setCourseDetailsOpen(null)} />}
       {saveNotice !== null && <SaveSuccessDialog count={saveNotice} close={() => setSaveNotice(null)} />}
     </main>
   );
 }
 
-function AuthDialog({ close, onAuthenticated }: { close: () => void; onAuthenticated: (user: Account) => void }) {
+function AuthDialog({ close, onAuthenticated, purpose }: {
+  close: () => void; onAuthenticated: (user: Account) => void; purpose: "transcript" | "map";
+}) {
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -527,7 +546,9 @@ function AuthDialog({ close, onAuthenticated }: { close: () => void; onAuthentic
   return <div className="modal-backdrop" onMouseDown={close}><div className="auth-dialog" onMouseDown={(event) => event.stopPropagation()}>
     <button className="modal-close" aria-label="關閉" onClick={close}><X size={17} /></button>
     <div className="auth-brand"><span><ShieldCheck size={22} /></span><div><p>Course Compass</p><h2>{mode === "login" ? "歡迎回來" : "建立你的 Course Compass 帳號"}</h2></div></div>
-    <p className="auth-description">登入後才能上傳成績單。原始檔只用於辨識，不會存進資料庫。</p>
+    <p className="auth-description">{purpose === "map"
+      ? "使用 Course Compass 帳號登入後，就能儲存和查看學習路徑。"
+      : "登入後才能上傳成績單。原始檔只用於辨識，不會存進資料庫。"}</p>
     <div className="auth-tabs"><button className={mode === "login" ? "active" : ""} onClick={() => setMode("login")}>登入</button><button className={mode === "register" ? "active" : ""} onClick={() => setMode("register")}>註冊</button></div>
     <form className="auth-form" onSubmit={submit}>
       {mode === "register" && <label><span>顯示名稱</span><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} maxLength={40} required placeholder="例如：小政" /></label>}
@@ -620,6 +641,7 @@ type CourseApiDetail = {
   objectivePoints: string[];
   prerequisites: string;
   offeredTerms: string[];
+  offerings?: NccuOffering[];
   syllabusSource: string;
   syllabusUrl: string;
   requirement: string;
@@ -699,7 +721,30 @@ function TeacherReviews({ groups }: { groups: TeacherReviewGroup[] }) {
   </section>;
 }
 
-function CourseDetailsModal({ course, close }: { course: Course; close: () => void }) {
+function NccuCourseOfferings({ rows, requestedCode }: { rows: NccuOffering[]; requestedCode: string }) {
+  const semesters = [...new Set(rows.map(({ semester }) => semester))];
+  const [semester, setSemester] = useState(() => rows.find(({ code }) => code === requestedCode)?.semester ?? semesters[0]);
+  const visible = rows.filter((row) => row.semester === semester);
+  return <section aria-label="開課班次">
+    <h3>開課班次</h3>
+    <label className="mb-3 flex w-fit items-center gap-2 text-xs">
+      學期
+      <select value={semester} onChange={(event) => setSemester(event.target.value)} className="rounded-lg border bg-background px-2 py-1.5">
+        {semesters.map((term) => <option key={term} value={term}>{term}</option>)}
+      </select>
+    </label>
+    <ul className="grid gap-2 sm:grid-cols-2">
+      {visible.map((offering) => <li key={offering.code} className="rounded-xl border bg-background p-3 text-xs">
+        <p className="font-semibold">{offering.code}{offering.language && <span className="ml-2 font-normal text-muted-foreground">{offering.language}</span>}</p>
+        {offering.title && <p className="mt-1 text-muted-foreground">該學期課名 {offering.title}</p>}
+        <p className="mt-1 text-muted-foreground">{offering.teacher || "授課教師待確認"}・{offering.schedule ?? "上課時間待確認"}</p>
+        <a className="mt-2 inline-flex items-center gap-1 underline underline-offset-2" href={offering.sourceUrl} target="_blank" rel="noreferrer"><ExternalLink size={12} aria-hidden="true" />查看班次來源<span className="sr-only"> {offering.semester} {offering.code}</span></a>
+      </li>)}
+    </ul>
+  </section>;
+}
+
+function CourseDetailsModal({ course, requestedCode, close }: { course: Course; requestedCode: string; close: () => void }) {
   const [detail, setDetail] = useState<CourseApiDetail | null>(null);
   const [status, setStatus] = useState("正在載入課程資料…");
   useEffect(() => {
@@ -720,15 +765,16 @@ function CourseDetailsModal({ course, close }: { course: Course; close: () => vo
       </div>
       <h2>{course.title}</h2>
       <p className="course-info-en">{course.titleEn}</p>
-      <div className="course-info-meta"><span>{course.unit}</span><span>{course.credits} 學分</span><span>{course.level}</span><span>{course.language}</span></div>
+      <div className="course-info-meta"><span>{course.unit}</span><span>{course.credits} 學分</span><span>{course.level}</span>{!detail?.offerings?.length && <span>{course.language}</span>}</div>
     </div>
     <div className="course-info-body">
       {status ? <p className="course-info-status">{status}</p> : <>
+        {!!detail?.offerings?.length && <NccuCourseOfferings rows={detail.offerings} requestedCode={requestedCode} />}
         <CourseTextSection title="課程簡介" points={detail?.descriptionPoints ?? []}
           original={detail?.description ?? ""} originalLabel="查看課程簡介原文" />
         <CourseTextSection title="課程目標與學習成效" points={detail?.objectivePoints ?? []}
           original={detail?.objectives ?? ""} originalLabel={course.school === "NTHU" ? "查看課程大綱原文" : "查看學習成效原文"} />
-        <div className="course-info-grid"><section><h3>授課教師</h3><p>{detail?.teacher || course.teacher}</p></section><section><h3>先修與限制</h3><p>{detail?.prerequisites || "無資料，請以校方系統為準"}</p></section><section><h3>曾開課學期</h3><p>{detail?.offeredTerms?.slice(0, 8).join("、") || "尚無資料"}</p></section><section><h3>資料來源</h3><p>{course.school === "NCCU" ? "政大歷年課程資料" : detail?.source || course.source}</p></section></div>
+        <div className="course-info-grid"><section><h3>{detail?.offerings?.length ? "歷年授課教師" : "授課教師"}</h3><p>{detail?.teacher || course.teacher}</p></section><section><h3>先修與限制</h3><p>{detail?.prerequisites || "無資料，請以校方系統為準"}</p></section><section><h3>曾開課學期</h3><p>{detail?.offeredTerms?.slice(0, 8).join("、") || "尚無資料"}</p></section><section><h3>資料來源</h3><p>{course.school === "NCCU" ? "政大歷年課程資料" : detail?.source || course.source}</p></section></div>
         {course.school === "NCCU" && <TeacherReviews groups={detail?.teacherReviews ?? []} />}
         <a className="official-syllabus-link" href={detail?.syllabusUrl || (course.school === "NCCU" ? "https://qrysub.nccu.edu.tw/" : "https://curricul.site.nthu.edu.tw/p/406-1208-290365,r7880.php?Lang=zh-tw")} target="_blank" rel="noreferrer"><ExternalLink size={16} />{course.school === "NCCU" ? "前往政大官方課程大綱" : "查看清大課程大綱／查詢系統"}</a>
       </>}
@@ -853,40 +899,63 @@ function StudyProfilePanel({ profile, openTranscript }: { profile: ReturnType<ty
   </section>;
 }
 
-function RecommendationMap({ selected, setSelected, compare, catalog, branches }: {
+function RecommendationMap({ selected, setSelected, compare, catalog, branches, mapName, setMapName, openSignIn }: {
   selected: Course; setSelected: (course: Course) => void; compare: Course[]; catalog: Course[]; branches: CourseMapBranch<Course>[];
+  mapName: string; setMapName: (name: string) => void; openSignIn: () => void;
 }) {
   type SavedMap = { id: string; name: string; payload: string; createdAt: string; updatedAt: string };
-  const [mapName, setMapName] = useState("我的學習路徑");
   const [savedMaps, setSavedMaps] = useState<SavedMap[]>([]);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [mapStatus, setMapStatus] = useState("");
+  const [needsSignIn, setNeedsSignIn] = useState(false);
   const [editingMapId, setEditingMapId] = useState<string | null>(null);
   const [editingName, setEditingName] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
-  const loadMaps = async () => {
+  const loadMaps = useCallback(async (signal?: AbortSignal) => {
+    if (signal?.aborted) return;
     try {
-      const response = await fetch("/api/maps");
+      const response = await fetch("/api/maps", { signal });
+      if (signal?.aborted) return;
+      if (response.status === 401) {
+        setSavedMaps([]);
+        setNeedsSignIn(true);
+        setMapStatus("登入後即可同步學習路徑");
+        return;
+      }
       if (!response.ok) throw new Error();
       const data = await response.json() as { maps: SavedMap[] };
-      setSavedMaps(data.maps);
-    } catch { setMapStatus("登入後即可同步學習路徑"); }
-  };
-  useEffect(() => {
-    let active = true;
-    void fetch("/api/maps").then(async (response) => {
-      if (!response.ok) throw new Error();
-      return await response.json() as { maps: SavedMap[] };
-    }).then((data) => { if (active) setSavedMaps(data.maps); }).catch(() => { if (active) setMapStatus("登入後即可同步學習路徑"); });
-    return () => { active = false; };
+      if (!signal?.aborted) {
+        setNeedsSignIn(false);
+        setSavedMaps(data.maps);
+      }
+    } catch {
+      if (!signal?.aborted) setMapStatus("目前無法讀取已保存的路徑");
+    }
   }, []);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    queueMicrotask(() => void loadMaps(controller.signal));
+    return () => controller.abort();
+  }, [loadMaps]);
+
   const saveMap = async () => {
+    if (needsSignIn) { openSignIn(); return; }
     setMapStatus("儲存中…");
-    const response = await fetch("/api/maps", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: mapName, payload: { selectedId: selected.id, compareIds: compare.map((item) => item.id), courseIds: branches.flatMap((branch) => branch.courses.map((course) => course.id)) } }) });
-    setMapStatus(response.ok ? "已儲存到你的帳號" : "儲存失敗，請確認已登入");
-    if (response.ok) { await loadMaps(); setHistoryOpen(true); }
+    try {
+      const response = await fetch("/api/maps", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: mapName, payload: { selectedId: selected.id, compareIds: compare.map((item) => item.id), courseIds: branches.flatMap((branch) => branch.courses.map((course) => course.id)) } }) });
+      if (response.status === 401) {
+        setNeedsSignIn(true);
+        setMapStatus("登入後即可同步學習路徑");
+        openSignIn();
+        return;
+      }
+      if (!response.ok) throw new Error();
+      setMapStatus("已儲存到你的帳號");
+      await loadMaps();
+      setHistoryOpen(true);
+    } catch { setMapStatus("儲存失敗，請稍後再試"); }
   };
   const renameMap = async (map: SavedMap, name: string) => {
     name = name.trim();
@@ -912,7 +981,7 @@ function RecommendationMap({ selected, setSelected, compare, catalog, branches }
   return (
     <section className="mt-7">
       <h2 className="mb-5 text-2xl font-bold tracking-tight">管理學習路徑</h2>
-      <div className="map-savebar mb-5 rounded-2xl border p-3 shadow-sm"><div className="flex flex-col gap-3 md:flex-row md:items-center"><div className="flex min-w-0 flex-1 items-center gap-2"><Save size={16} /><input aria-label="學習路徑名稱" className="map-name-input min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm outline-none" value={mapName} onChange={(event) => setMapName(event.target.value)} maxLength={80} /></div><button className="save-map-button rounded-xl px-4 py-2.5 text-xs font-bold" onClick={saveMap}>儲存目前路徑</button><button className="history-button flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-bold" onClick={() => setHistoryOpen((open) => !open)}><History size={15} />已保存路徑 <span>{savedMaps.length}</span></button></div>{mapStatus && <p className="mt-2 text-[11px] text-muted-foreground">{mapStatus}</p>}
+      <div className="map-savebar mb-5 rounded-2xl border p-3 shadow-sm"><div className="flex flex-col gap-3 md:flex-row md:items-center"><div className="flex min-w-0 flex-1 items-center gap-2"><Save size={16} /><input aria-label="學習路徑名稱" className="map-name-input min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm outline-none" value={mapName} onChange={(event) => setMapName(event.target.value)} maxLength={80} /></div><button className="save-map-button rounded-xl px-4 py-2.5 text-xs font-bold" onClick={saveMap}>儲存目前路徑</button><button className="history-button flex items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-bold" onClick={() => needsSignIn ? openSignIn() : setHistoryOpen((open) => !open)}><History size={15} />已保存路徑 <span>{savedMaps.length}</span></button></div>{mapStatus && <p className="mt-2 text-[11px] text-muted-foreground">{mapStatus}</p>}
         {historyOpen && <div className="mt-3 grid gap-2 border-t pt-3 md:grid-cols-2 xl:grid-cols-3">{savedMaps.length ? savedMaps.map((map) => <div key={map.id} className="saved-map-row flex items-center gap-2 rounded-xl border p-3">{editingMapId === map.id ? <><input aria-label="新的地圖名稱" className="map-name-input min-w-0 flex-1 rounded-lg border px-2 py-1.5 text-xs" value={editingName} onChange={(event) => setEditingName(event.target.value)} autoFocus /><button aria-label="保存名稱" className="mini-action" onClick={() => renameMap(map, editingName)}><Check size={13} /></button><button aria-label="取消改名" className="mini-action" onClick={() => setEditingMapId(null)}><X size={13} /></button></> : <><button className="min-w-0 flex-1 text-left" onClick={() => openMap(map)}><span className="block truncate text-xs font-bold">{map.name}</span><span className="mt-1 block text-[10px] text-muted-foreground">{new Date(map.updatedAt).toLocaleString("zh-TW")}</span></button><button aria-label="重新命名" className="mini-action" onClick={() => { setEditingMapId(map.id); setEditingName(map.name); setDeleteConfirmId(null); }}><Pencil size={13} /></button>{deleteConfirmId === map.id ? <button aria-label="確認刪除" className="mini-action danger confirm-delete" onClick={() => deleteMap(map)}>確定</button> : <button aria-label="刪除地圖" className="mini-action danger" onClick={() => { setDeleteConfirmId(map.id); setEditingMapId(null); }}><Trash2 size={13} /></button>}</>}</div>) : <p className="py-3 text-xs text-muted-foreground">尚無紀錄，替目前路徑命名後儲存。</p>}</div>}
       </div>
     </section>
