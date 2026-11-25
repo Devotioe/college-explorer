@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCourseMapBranches } from "../lib/course-map.ts";
+import { buildCourseMapBranches, buildSemesterPlan, getCourseRequirementNotes } from "../lib/course-map.ts";
 
 const course = (code, title, properties = {}) => ({
   id: `nccu-${code}`, school: "NCCU", code, title, level: "大學部", domains: [], ...properties,
@@ -144,4 +144,37 @@ test("never invents a branch from unparsed text or a nonmatching domain", () => 
   const target = course("308041001", "保險契約法", { prerequisites: "[ 保險學(單學期)(修習且及格) 或 民法(單學期)(修" });
   const insurance = course("308001001", "保險學");
   assert.deepEqual(buildCourseMapBranches(target, [target, insurance], [], sharedDomains), []);
+});
+
+test("parses NTHU's joined course labels and keeps exclusions outside the prerequisites", () => {
+  const nthu = (code, title, prerequisites) => course(code, title, { school: "NTHU", prerequisites });
+  const target = nthu("EE3230", "積體電路設計導論",
+    "擋修對象 : 大學部\n先修科目 : 電子學一-成績需C-以上電子學-成績需C-以上上述條件任選一科，而且 曾修邏輯設計曾修電路學上述條件一定要有，而且 未修過舊版實驗上述條件一定要有，則不擋修。｜限電機系");
+  const catalog = [target, nthu("EE2250", "電子學一"), nthu("EE1001", "邏輯設計"), nthu("EE1002", "電路學"), nthu("EE1003", "舊版實驗")];
+  const branches = buildCourseMapBranches(target, catalog, [], sharedDomains);
+  assert.deepEqual(branches.map(({ requirement }) => requirement), ["電子學一 或 電子學", "邏輯設計", "電路學"]);
+  assert.match(branches[0].conditions, /成績需 C- 以上/);
+  assert.deepEqual(getCourseRequirementNotes(target), ["擋修適用對象・大學部", "未修過條件（一定要有）・舊版實驗"]);
+});
+
+test("a semester plan follows multiple prerequisite levels and skips a completed prerequisite", () => {
+  const first = course("703001001", "基礎");
+  const second = course("703002001", "中階", { prerequisites: "[基礎(單學期)(修習且及格)]" });
+  const goal = course("703003001", "專題", { prerequisites: "[中階(單學期)(修習且及格)]" });
+  const catalog = [first, second, goal];
+  const titles = (plan) => plan.semesters.map(([semester, entries]) => [semester, entries.map(({ course }) => course.title)]);
+  assert.deepEqual(titles(buildSemesterPlan([goal], catalog, [])), [[1, ["基礎"]], [2, ["中階"]], [3, ["專題"]]]);
+  assert.deepEqual(titles(buildSemesterPlan([goal], catalog, [transcript(first.code, first.title, "84")])), [[1, ["中階"]], [2, ["專題"]]]);
+});
+
+test("a selectable alternative resolves a cycle, but an unresolved all-year condition still blocks its course", () => {
+  const root = course("703001001", "基礎");
+  const first = course("703002001", "第一專題", { prerequisites: "[第二專題(單學期)(修習且及格) 或 基礎(單學期)(修習且及格)]" });
+  const second = course("703003001", "第二專題", { prerequisites: "[第一專題(單學期)(修習且及格)]" });
+  const final = course("703004001", "校外實習", { prerequisites: "[第二專題(單學期)(修習且及格)] 及 [專題研究(全學年)(修習且及格)]" });
+  const plan = buildSemesterPlan([final], [root, first, second, final], []);
+  assert.deepEqual(plan.semesters.map(([number, items]) => [number, items.map(({ course }) => course.id)]), [
+    [1, [root.id]], [2, [first.id]], [3, [second.id]],
+  ]);
+  assert.match(plan.notes[0], /專題研究（全學年）/);
 });

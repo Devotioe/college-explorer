@@ -8,10 +8,12 @@ export type CourseMapBranch<T> = {
   courses: T[];
   status: "passed" | "recorded" | "no-record";
   relation: "official" | "related";
+  topics?: string[];
 };
 
 type CourseStatus = CourseMapBranch<MapCourse>["status"];
 type Prerequisite = { title: string; duration: string; completion: string };
+type Requirements = { groups: Prerequisite[][]; review: string[]; audience?: string };
 
 const statusRank: Record<CourseStatus, number> = { "no-record": 0, recorded: 1, passed: 2 };
 const unfinishedGrade = /^(?:W(?:退選|停修|撤選|WITHDRAWN)?|WITHDRAWN|WITHDRAWAL|退選|撤選|停修|棄修|已退選|I|IP|INCOMPLETE|INPROGRESS|PENDING|修課中|修習中|修讀中|選修中|在修|未修畢|未完成|成績未定|尚未登錄|未登錄|未評分|未送出|未公布|待補|待定|待登錄|NA)$/u;
@@ -43,6 +45,54 @@ function parsePrerequisites(prerequisites: string): Prerequisite[][] {
     parsed.push(alternatives);
   }
   return parsed;
+}
+
+function parseNthuPrerequisites(text: string): Requirements {
+  const header = /擋修對象\s*:\s*([\s\S]*?)\s*先修科目\s*:\s*([\s\S]*?)\s*,\s*則不擋修\s*[。.]?$/u
+    .exec(text.split("｜")[0].normalize("NFKC"));
+  if (!header) return { groups: [], review: text.includes("先修科目") ? ["先修條件格式有待人工確認"] : [] };
+  const [, audience, rules] = header;
+  const groups: Prerequisite[][] = [];
+  const review: string[] = [];
+  for (const block of rules.split(/,\s*而且\s*/u)) {
+    const rule = /^([\s\S]*?)上述條件\s*(一定要有|任選一科)$/u.exec(block.trim());
+    if (!rule) return { groups: [], review: ["先修條件格式有待人工確認"], audience };
+    const alternatives: Prerequisite[] = [];
+    const exclusions: string[] = [];
+    for (let entry of rule[1].trim().split(/(?=曾修|未修過)/u)) {
+      entry = entry.trim();
+      if (!entry) continue;
+      const recorded = /^(曾修|未修過)\s*([\s\S]+)$/u.exec(entry);
+      if (recorded) {
+        if (recorded[1] === "未修過") exclusions.push(recorded[2].trim());
+        else alternatives.push({ title: recorded[2].trim(), duration: "單學期", completion: "曾修" });
+        continue;
+      }
+      while (entry) {
+        const grade = /^(.+?)[-−]\s*成績需\s*([A-F][+-]?)\s*以上/iu.exec(entry);
+        if (!grade) return { groups: [], review: ["先修條件格式有待人工確認"], audience };
+        alternatives.push({ title: grade[1].trim(), duration: "單學期", completion: `成績需 ${grade[2]} 以上` });
+        entry = entry.slice(grade[0].length).trim();
+      }
+    }
+    if (exclusions.length) review.push(`未修過條件（${rule[2]}）・${exclusions.join("、")}`);
+    if (rule[2] === "一定要有") groups.push(...alternatives.map((item) => [item]));
+    else if (alternatives.length && !exclusions.length) groups.push(alternatives);
+    else if (alternatives.length) review.push("同一擇一組含曾修與未修過條件，請查閱校方原文");
+  }
+  return { groups, review, audience };
+}
+
+function courseRequirements(course: MapCourse): Requirements {
+  const text = course.prerequisites?.trim() ?? "";
+  if (course.school === "NTHU") return parseNthuPrerequisites(text);
+  const groups = parsePrerequisites(text);
+  return { groups, review: !groups.length && text && text !== "無先修設定" ? ["先修條件格式有待人工確認"] : [] };
+}
+
+export function getCourseRequirementNotes(course: MapCourse) {
+  const { audience, review } = courseRequirements(course);
+  return [...(audience && audience !== "全校" ? [`擋修適用對象・${audience}`] : []), ...review];
 }
 
 function describeConditions(alternatives: Prerequisite[]) {
@@ -102,31 +152,43 @@ function indexTranscript<T extends MapCourse>(catalog: readonly T[], completed: 
 }
 
 function departmentPrefix(course: MapCourse) {
-  return course.school === "NCCU" ? /^([1-9]\d{2})\d{6}$/u.exec(codeKey(course.code))?.[1] : undefined;
+  return course.school === "NCCU" ? /^([1-9]\d{2})\d{6}$/u.exec(codeKey(course.code))?.[1]
+    : /^([a-z]+)\d+$/u.exec(codeKey(course.code))?.[1];
 }
 
-function officialBranches<T extends MapCourse>(target: T, catalog: readonly T[], groups: Prerequisite[][], transcript: ReturnType<typeof indexTranscript<T>>): CourseMapBranch<T>[] {
-  const byTitle = indexCourses(catalog.filter((course) => course.school === target.school), (course) => courseKey(course.title));
+function resolvePrerequisite<T extends MapCourse>(target: T, candidates: T[]) {
+  const eligible = candidates.filter((course) => course.id !== target.id && codeKey(course.code) !== codeKey(target.code));
   const prefix = departmentPrefix(target);
+  const sameDepartment = prefix ? eligible.filter((course) => departmentPrefix(course) === prefix) : [];
+  const preferred = sameDepartment.length ? sameDepartment : eligible;
+  return preferred.length === 1 ? preferred[0] : undefined;
+}
+
+function satisfiesRequirement(requirement: Prerequisite, status?: CourseStatus) {
+  return requirement.duration === "單學期" && (status === "passed"
+    || (status === "recorded" && requirement.completion === "有修即可"));
+}
+
+function officialBranches<T extends MapCourse>(target: T, catalog: readonly T[], requirements: Requirements, transcript: ReturnType<typeof indexTranscript<T>>): CourseMapBranch<T>[] {
+  const byTitle = indexCourses(catalog.filter((course) => course.school === target.school), (course) => courseKey(course.title));
+  const { groups, audience } = requirements;
   return groups.map((alternatives, index) => {
     const courses: T[] = [];
     let status: CourseStatus = "no-record";
-    for (const { title, duration } of alternatives) {
-      const key = courseKey(title);
+    for (const requirement of alternatives) {
+      const key = courseKey(requirement.title);
       const candidates = byTitle.get(key) ?? [];
-      const sameDepartment = prefix ? candidates.filter((course) => departmentPrefix(course) === prefix) : [];
-      const preferred = sameDepartment.length ? sameDepartment : candidates;
-      // Transcript evidence can describe an attempt but cannot identify an ambiguous requirement.
-      const linked = preferred.length === 1 ? preferred[0] : null;
+      const linked = resolvePrerequisite(target, candidates);
       if (linked && !courses.some((course) => course.id === linked.id)) courses.push(linked);
       const known = linked ? transcript.resolved.get(linked.id) : undefined;
       const hasRecord = Boolean(known || (target.school === "NCCU" && transcript.unresolved.has(key)) || candidates.some((course) => transcript.resolved.has(course.id)));
-      const next = known === "passed" && duration === "單學期" ? "passed" : hasRecord ? "recorded" : "no-record";
+      const next = satisfiesRequirement(requirement, known) ? "passed" : hasRecord ? "recorded" : "no-record";
       if (statusRank[next] > statusRank[status]) status = next;
     }
     return {
       key: `official-${index}`, requirement: alternatives.map(({ title }) => title).join(" 或 "),
-      conditions: describeConditions(alternatives), courses, status, relation: "official",
+      conditions: [describeConditions(alternatives), audience && audience !== "全校" ? `擋修對象・${audience}` : ""].filter(Boolean).join("｜"),
+      courses, status, relation: "official",
     };
   });
 }
@@ -141,17 +203,17 @@ export function buildCourseMapBranches<T extends MapCourse>(
   const targetCode = codeKey(target.code);
   const candidates = uniqueCatalog.filter((course) => course.id !== target.id && (!targetCode || course.school !== target.school || codeKey(course.code) !== targetCode));
   const transcript = indexTranscript(uniqueCatalog, completed);
-  const requirements = parsePrerequisites(target.prerequisites ?? "");
-  if (requirements.length) return officialBranches(target, candidates, requirements, transcript);
+  const requirements = courseRequirements(target);
+  if (requirements.groups.length) return officialBranches(target, candidates, requirements, transcript);
 
   const targetTitle = courseKey(target.title);
   const related = candidates.filter((course) => courseKey(course.title) !== targetTitle
     && !(target.level === "大學部" && course.level === "研究所")).map((course) => ({
     course,
     status: transcript.resolved.get(course.id) ?? "no-record",
-    overlap: new Set(sharedDomains(target, course).filter(Boolean)).size,
-  })).filter(({ overlap }) => overlap > 0).sort((a, b) =>
-    statusRank[b.status] - statusRank[a.status] || b.overlap - a.overlap
+    topics: [...new Set(sharedDomains(target, course).filter(Boolean))],
+  })).filter(({ topics }) => topics.length > 0).sort((a, b) =>
+    statusRank[b.status] - statusRank[a.status] || b.topics.length - a.topics.length
     || Number(b.course.school === target.school) - Number(a.course.school === target.school)
     || a.course.id.localeCompare(b.course.id, "en"),
   );
@@ -165,8 +227,104 @@ export function buildCourseMapBranches<T extends MapCourse>(
   const shown = ranked.slice(0, 4);
   const last = shown.at(-1);
   if (shown.length === 4 && last?.status === "no-record" && shown.every(({ course }) => course.school === last.course.school)) {
-    const otherSchool = ranked.find(({ course, overlap }) => course.school !== last.course.school && overlap >= Math.max(2, last.overlap));
+    const otherSchool = ranked.find(({ course, topics }) => course.school !== last.course.school && topics.length >= Math.max(2, last.topics.length));
     if (otherSchool) shown[3] = otherSchool;
   }
-  return shown.map(({ course, status }) => ({ key: `related-${course.id}`, requirement: course.title, courses: [course], status, relation: "related" }));
+  return shown.map(({ course, status, topics }) => ({ key: `related-${course.id}`, requirement: course.title, courses: [course], status, relation: "related", topics }));
+}
+
+export function buildSemesterPlan<T extends MapCourse>(targets: readonly T[], catalog: readonly T[], completed: readonly TranscriptRow[]) {
+  const unique = [...new Map([...catalog, ...targets].map((course) => [course.id, course])).values()];
+  const transcript = indexTranscript(unique, completed).resolved;
+  const bySchoolAndTitle = indexCourses(unique, (course) => `${course.school}:${courseKey(course.title)}`);
+  type Group = { label: string; choices: T[]; satisfied: boolean };
+  type Node = { course: T; groups: Group[]; notes: string[]; pending: boolean; semester: number };
+  const graph = new Map<string, Node>();
+  const complete = new Set<string>();
+  const targetIds = new Set(targets.map(({ id }) => id));
+
+  function collect(course: T) {
+    if (graph.has(course.id)) return;
+    const requirements = courseRequirements(course);
+    const groups = requirements.groups.map((alternatives): Group => {
+      const label = alternatives.map(({ title, duration }) => duration === "全學年" ? `${title}（全學年）` : title).join(" 或 ");
+      const choices: T[] = [];
+      for (const requirement of alternatives) {
+        if (requirement.duration !== "單學期") continue;
+        const linked = resolvePrerequisite(course, bySchoolAndTitle.get(`${course.school}:${courseKey(requirement.title)}`) ?? []);
+        if (!linked) continue;
+        if (satisfiesRequirement(requirement, transcript.get(linked.id))) return { label, choices: [], satisfied: true };
+        choices.push(linked);
+      }
+      return { label, choices, satisfied: false };
+    });
+    graph.set(course.id, {
+      course, groups, notes: getCourseRequirementNotes(course),
+      pending: requirements.review.some((note) => note.includes("格式") || note.includes("同一擇一組")),
+      semester: Infinity,
+    });
+    for (const group of groups) group.choices.forEach(collect);
+  }
+
+  for (const course of targets) {
+    if (transcript.get(course.id) === "passed") complete.add(course.id);
+    else collect(course);
+  }
+
+  function earliestChoice(group: Group) {
+    return group.choices.reduce<Node | undefined>((best, candidate) => {
+      const next = graph.get(candidate.id)!;
+      return next.semester < (best?.semester ?? Infinity) ? next : best;
+    }, undefined);
+  }
+
+  // Each pass gives a course a term only when every group has an earlier
+  // eligible option. A cycle without an external alternative stays unresolved.
+  for (let pass = 0; pass < graph.size; pass += 1) {
+    let changed = false;
+    for (const node of graph.values()) {
+      if (node.pending) continue;
+      const prerequisites = node.groups.filter(({ satisfied }) => !satisfied);
+      const semester = 1 + Math.max(0, ...prerequisites.map((group) => earliestChoice(group)?.semester ?? Infinity));
+      if (semester < node.semester) {
+        node.semester = semester;
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  const visited = new Set<string>();
+  const notes = new Set<string>();
+  const semesters = new Map<number, { course: T; target: boolean }[]>();
+  function include(node: Node, visiting: ReadonlySet<string>) {
+    const { course, semester } = node;
+    if (visiting.has(course.id)) {
+      notes.add(`${course.title}・先修條件出現循環`);
+      return;
+    }
+    if (visited.has(course.id)) return;
+    visited.add(course.id);
+    const path = new Set([...visiting, course.id]);
+    if (Number.isFinite(semester)) {
+      const entries = semesters.get(semester) ?? [];
+      entries.push({ course, target: targetIds.has(course.id) });
+      semesters.set(semester, entries);
+    }
+    for (const note of node.notes) notes.add(`${course.title}・${note}`);
+    for (const group of node.groups) {
+      if (group.satisfied) continue;
+      const choice = earliestChoice(group);
+      if (choice) include(choice, path);
+      else {
+        notes.add(`${course.title}・待確認先修「${group.label}」`);
+        if (group.choices.length === 1) include(graph.get(group.choices[0].id)!, path);
+      }
+    }
+  }
+  for (const course of targets) {
+    const node = graph.get(course.id);
+    if (node) include(node, new Set());
+  }
+  return { semesters: [...semesters].sort(([a], [b]) => a - b), complete, notes: [...notes] };
 }

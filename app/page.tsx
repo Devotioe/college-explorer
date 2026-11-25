@@ -17,7 +17,7 @@ import {
   LoaderCircle,
   LogIn,
   LogOut,
-  Map,
+  Map as MapIcon,
   Network,
   ScanLine,
   Search,
@@ -34,8 +34,10 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { buildCourseMapBranches, type CourseMapBranch } from "../lib/course-map";
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { buildCourseMapBranches, buildSemesterPlan, getCourseRequirementNotes, type CourseMapBranch } from "../lib/course-map";
+import type { CourseRecommendation } from "../lib/course-recommendations";
+import { curricula, curriculumId, resolveCurriculum } from "../lib/curricula";
 import { normalizeNccuCourseCode } from "../lib/nccu-course-code.mjs";
 import type { NccuOffering } from "../lib/nccu-offerings";
 import { buildNccuStudyProfile } from "../lib/nccu-study-profile";
@@ -231,6 +233,7 @@ const domainRules: Record<string, string[]> = {
   "政策、法律與治理": ["公共政策", "治理", "科技法律", "倫理", "社會影響"],
   "經濟與決策": ["經濟", "決策", "量化方法"],
   "化學與生醫": ["化學", "基礎科學", "實驗思維", "生醫", "生物"],
+  "設計與創新": ["設計思考", "使用者體驗", "互動設計", "視覺設計"],
 };
 
 function courseDomains(course: Course) {
@@ -291,14 +294,43 @@ function apiCourseToCourse(item: ApiCourse): Course {
 }
 
 const schoolLabel: Record<School, string> = { NTHU: "清大", NCCU: "政大" };
+const sharedTopicExplanation = "兩門課的課程標籤若能歸到同一個學習領域，就列為共同主題。例如「程式設計」和「資料結構」都歸入「程式與軟體」。";
+const favoritesKey = "course-compass-favorites";
+type SearchResponse = { query: string; total: number; results: CourseRecommendation[] };
 
 function SchoolBadge({ school }: { school: School }) {
   return <span className={`school-badge ${school === "NTHU" ? "school-nthu" : "school-nccu"}`}>{schoolLabel[school]}</span>;
 }
 
+function FavoriteButton({ course, saved, disabled, toggle }: { course: Course; saved: boolean; disabled: boolean; toggle: (id: string) => void }) {
+  return <button type="button" aria-label={`${saved ? "取消收藏" : "收藏"} ${course.title}`} aria-pressed={saved} disabled={disabled}
+    className={`icon-button ${saved ? "icon-button-saved" : ""}`}
+    onClick={(event) => { event.stopPropagation(); toggle(course.id); }}>
+    <Heart size={16} fill={saved ? "currentColor" : "none"} />
+  </button>;
+}
+
+function RecommendationEvidence({ recommendation }: { recommendation: CourseRecommendation }) {
+  return <details className="semantic-hint mt-4 rounded-xl border px-3 py-2 text-sm leading-6" onClick={(event) => event.stopPropagation()}>
+    <summary className="cursor-pointer font-semibold">
+      推薦理由{recommendation.evidence[0]?.topic ? `・${recommendation.evidence[0].topic}` : ""}
+    </summary>
+    <ul className="mt-2 space-y-2">
+      {recommendation.evidence.map(({ topic, queryTerm, matchedTerm, source, excerpt, related }, index) => <li key={`${source}-${index}`}>
+        {topic && <span>「{queryTerm}」對應「{topic}」。{related && `「${matchedTerm}」是可銜接的內容。`}</span>}
+        <span className="block"><strong>{source}</strong>・{excerpt}</span>
+      </li>)}
+    </ul>
+    {recommendation.syllabusUrl && <a className="mt-2 inline-block font-semibold underline" href={recommendation.syllabusUrl} target="_blank" rel="noreferrer">查看來源大綱</a>}
+  </details>;
+}
+
 export default function Home() {
-  const [view, setView] = useState<"discover" | "map">("discover");
+  const [view, setView] = useState<"discover" | "map" | "favorites">("discover");
   const [query, setQuery] = useState("");
+  const [submittedQuery, setSubmittedQuery] = useState("");
+  const [searchAttempt, setSearchAttempt] = useState(0);
+  const [searchResult, setSearchResult] = useState<{ key: string; data?: SearchResponse; error?: string }>();
   const [school, setSchool] = useState<"ALL" | School>("ALL");
   const [level, setLevel] = useState<"ALL" | Course["level"]>("ALL");
   const [language, setLanguage] = useState<"ALL" | Course["language"]>("ALL");
@@ -306,7 +338,9 @@ export default function Home() {
   const [catalogStatus, setCatalogStatus] = useState("正在連接 D1 課程資料庫…");
   const [selected, setSelected] = useState<Course>(featuredMapCourses[0]);
   const [compare, setCompare] = useState<Course[]>([]);
-  const [saved, setSaved] = useState<string[]>([]);
+  const [storedFavorites, setStoredFavorites] = useState<string[] | null>(null);
+  const [favoriteStorageError, setFavoriteStorageError] = useState(false);
+  const saved = storedFavorites ?? [];
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [compareOpen, setCompareOpen] = useState(false);
   const [theme, setTheme] = useState<Theme>(initialTheme);
@@ -326,6 +360,26 @@ export default function Home() {
   useEffect(() => {
     queueMicrotask(() => setTheme(readStoredTheme(localStorage)));
   }, []);
+
+  useEffect(() => {
+    queueMicrotask(() => {
+      try {
+        const value: unknown = JSON.parse(localStorage.getItem(favoritesKey) ?? "[]");
+        setStoredFavorites(Array.isArray(value) ? [...new Set(value.filter((id): id is string => typeof id === "string"))] : []);
+      } catch {
+        setStoredFavorites([]);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!storedFavorites) return;
+    try {
+      localStorage.setItem(favoritesKey, JSON.stringify(storedFavorites));
+    } catch {
+      queueMicrotask(() => setFavoriteStorageError(true));
+    }
+  }, [storedFavorites]);
 
   useEffect(() => {
     let active = true;
@@ -394,8 +448,37 @@ export default function Home() {
     document.documentElement.dataset.theme = nextTheme;
   };
 
+  const searchKey = JSON.stringify([submittedQuery, school, level, language, searchAttempt]);
+  const currentSearch = searchResult?.key === searchKey ? searchResult : undefined;
+  const searchPending = Boolean(submittedQuery && !currentSearch);
+
+  useEffect(() => {
+    if (!submittedQuery) return;
+    const abort = new AbortController();
+    void fetch("/api/semantic-search", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: submittedQuery, school, level, language }),
+      signal: abort.signal,
+    }).then(async (response) => {
+      if (!response.ok) throw new Error();
+      return await response.json() as SearchResponse;
+    }).then((data) => {
+      if (!abort.signal.aborted) setSearchResult({ key: searchKey, data });
+    }).catch(() => {
+      if (!abort.signal.aborted) setSearchResult({ key: searchKey, error: "語意推薦暫時無法取得，目前顯示文字搜尋結果。" });
+    });
+    return () => abort.abort();
+  }, [searchKey, submittedQuery, school, level, language]);
+
+  const courseById = useMemo(() => new Map(catalogCourses.map((course) => [course.id, course])), [catalogCourses]);
+  const recommendations = useMemo(() => new Map(currentSearch?.data?.results.map((result) => [result.id, result])), [currentSearch]);
   const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    if (currentSearch?.data) return currentSearch.data.results.flatMap(({ id }) => {
+      const course = courseById.get(id);
+      return course ? [course] : [];
+    });
+    const q = query.trim().normalize("NFKC").toLowerCase();
     const code = normalizeNccuCourseCode(q);
     return catalogCourses.filter((course) => {
       const literal = [course.title, course.titleEn, course.code, course.unit, ...course.tags].join(" ").toLowerCase();
@@ -405,9 +488,20 @@ export default function Home() {
       const matchesQuery = !q || literal.includes(q) || semantic.includes(q) || matchesOfferingCode;
       return matchesQuery && (school === "ALL" || course.school === school) && (level === "ALL" || course.level === level) && (language === "ALL" || course.language === language);
     }).sort((a, b) => b.fit - a.fit || a.title.localeCompare(b.title, "zh-Hant"));
-  }, [catalogCourses, query, school, level, language]);
+  }, [catalogCourses, courseById, currentSearch, query, school, level, language]);
 
-  const visibleCourses = filtered.slice(0, 120);
+  const favoriteCourses = saved.flatMap((id) => {
+    const course = courseById.get(id);
+    return course ? [course] : [];
+  });
+  const visibleCourses = view === "favorites" ? favoriteCourses : filtered.slice(0, 120);
+  const resultCount = currentSearch?.data?.total ?? filtered.length;
+  const toggleFavorite = (id: string) => setStoredFavorites((items) => items?.includes(id) ? items.filter((item) => item !== id) : [...(items ?? []), id]);
+  const submitSearch = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setSubmittedQuery(query.trim());
+    setSearchAttempt((attempt) => attempt + 1);
+  };
 
   const mapBranches = useMemo(
     () => view === "map" ? buildCourseMapBranches(selected, catalogCourses, transcriptCourses, sharedDomains) : [],
@@ -422,7 +516,7 @@ export default function Home() {
     setCourseDetailsOpen(course);
   };
 
-  const resetFilters = () => { setSchool("ALL"); setLevel("ALL"); setLanguage("ALL"); setQuery(""); };
+  const resetFilters = () => { setSchool("ALL"); setLevel("ALL"); setLanguage("ALL"); setQuery(""); setSubmittedQuery(""); };
   const logout = async () => {
     await fetch("/api/auth/logout", { method: "POST" });
     setAccount(null);
@@ -441,7 +535,8 @@ export default function Home() {
           </button>
           <nav className="ml-auto hidden items-center gap-1 rounded-full border border-black/8 bg-white/65 p-1 sm:flex">
             <button className={`nav-pill ${view === "discover" ? "nav-pill-active" : ""}`} onClick={() => setView("discover")}><Compass size={15} /> 探索</button>
-            <button className={`nav-pill ${view === "map" ? "nav-pill-active" : ""}`} onClick={() => setView("map")}><Map size={15} /> 學習路徑</button>
+            <button className={`nav-pill ${view === "map" ? "nav-pill-active" : ""}`} onClick={() => setView("map")}><MapIcon size={15} /> 學習路徑</button>
+            <button className={`nav-pill ${view === "favorites" ? "nav-pill-active" : ""}`} onClick={() => setView("favorites")}><Heart size={15} /> 收藏{saved.length > 0 && ` ${saved.length}`}</button>
           </nav>
           <button aria-label={theme === "light" ? "切換暗夜主題" : "切換亮色主題"} className="theme-toggle" onClick={toggleTheme}>
             {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}<span className="hidden lg:inline">{theme === "light" ? "暗夜" : "亮色"}</span>
@@ -460,49 +555,57 @@ export default function Home() {
         {view === "discover" ? <section className="hero-grid relative overflow-hidden rounded-b-[36px] px-5 py-8 text-white sm:px-8 sm:py-10 lg:px-12">
           <div className="relative z-10 max-w-3xl">
             <p className="max-w-2xl text-sm leading-7 text-white/70 sm:text-base">登入後上傳政大成績單，確認辨識出的課程與成績，再依你的學習軌跡探索下一門課。</p>
-            <div className="hero-search mt-5 flex max-w-3xl items-center gap-2 rounded-2xl p-2 shadow-[0_24px_60px_rgba(0,0,0,.22)]">
+            <form onSubmit={submitSearch} className="hero-search mt-5 flex max-w-3xl items-center gap-2 rounded-2xl p-2 shadow-[0_24px_60px_rgba(0,0,0,.22)]">
               <Search className="ml-2 shrink-0 text-[#6d7773]" size={20} />
-              <input aria-label="搜尋課程" className="min-w-0 flex-1 bg-transparent px-1 py-2 text-sm outline-none sm:text-base" placeholder="試試 APP、永續、資料治理…" value={query} onChange={(event) => setQuery(event.target.value)} />
-              <button className="semantic-search-button rounded-xl px-4 py-2.5 text-sm font-bold" onClick={() => setView("discover")}>語意搜尋</button>
-            </div>
+              <input aria-label="搜尋課程" className="min-w-0 flex-1 bg-transparent px-1 py-2 text-sm outline-none sm:text-base" placeholder="例如：我想學做手機 APP" maxLength={200} value={query} onChange={(event) => { setQuery(event.target.value); setSubmittedQuery(""); }} />
+              <button type="submit" disabled={!query.trim() || searchPending} className="semantic-search-button shrink-0 rounded-xl px-4 py-2.5 text-sm font-bold disabled:opacity-55">{searchPending ? "搜尋中…" : "語意搜尋"}</button>
+            </form>
             <p className="mt-3 flex items-center gap-2 text-xs text-white/60"><Sparkles size={13} />不必輸入完整課名，例如 APP 也能找到「程式設計一」。</p>
           </div>
           <div className="hero-orbit hidden lg:block" aria-hidden="true"><span className="orbit-ring orbit-one" /><span className="orbit-ring orbit-two" /><span className="orbit-dot dot-one" /><span className="orbit-dot dot-two" /><span className="orbit-dot dot-three" /><span className="orbit-center"><Sparkles size={24} /></span></div>
-        </section> : <LearningPathHero selected={selected} branches={mapBranches} setSelected={setSelected} openDetails={setCourseDetailsOpen} chooseTarget={() => setView("discover")} />}
+        </section> : view === "map" ? <LearningPathHero selected={selected} branches={mapBranches} setSelected={setSelected} openDetails={setCourseDetailsOpen} chooseTarget={() => setView("discover")} /> : null}
 
-        <div className="mt-5 flex sm:hidden"><button className={`mobile-tab ${view === "discover" ? "mobile-tab-active" : ""}`} onClick={() => setView("discover")}><Compass size={16} />探索</button><button className={`mobile-tab ${view === "map" ? "mobile-tab-active" : ""}`} onClick={() => setView("map")}><Map size={16} />學習路徑</button></div>
+        <div className="mt-5 flex sm:hidden"><button className={`mobile-tab ${view === "discover" ? "mobile-tab-active" : ""}`} onClick={() => setView("discover")}><Compass size={16} />探索</button><button className={`mobile-tab ${view === "map" ? "mobile-tab-active" : ""}`} onClick={() => setView("map")}><MapIcon size={16} />學習路徑</button><button className={`mobile-tab ${view === "favorites" ? "mobile-tab-active" : ""}`} onClick={() => setView("favorites")}><Heart size={16} />收藏{saved.length > 0 && ` ${saved.length}`}</button></div>
 
-        {view === "discover" ? (
-          <section className="mt-7 grid gap-6 xl:grid-cols-[260px_minmax(0,1fr)]">
-            <aside className={`${filtersOpen ? "block" : "hidden"} xl:block`}>
+        {view !== "map" ? (
+          <section className={`mt-7 grid gap-6 ${view === "discover" ? "xl:grid-cols-[260px_minmax(0,1fr)]" : ""}`}>
+            {view === "discover" && <aside className={`${filtersOpen ? "block" : "hidden"} xl:block`}>
               <div className="sticky top-24 rounded-3xl border border-black/8 bg-white/80 p-5 shadow-sm">
                 <div className="mb-5 flex items-center justify-between"><h2 className="flex items-center gap-2 text-sm font-bold"><SlidersHorizontal size={17} />篩選條件</h2><button className="text-xs font-semibold text-[#d65f43]" onClick={resetFilters}>清除</button></div>
                 <FilterGroup label="學校"><FilterButton active={school === "ALL"} onClick={() => setSchool("ALL")}>全部</FilterButton><FilterButton active={school === "NTHU"} onClick={() => setSchool("NTHU")}>清大</FilterButton><FilterButton active={school === "NCCU"} onClick={() => setSchool("NCCU")}>政大</FilterButton></FilterGroup>
                 <FilterGroup label="課程層級"><FilterButton active={level === "ALL"} onClick={() => setLevel("ALL")}>全部</FilterButton><FilterButton active={level === "大學部"} onClick={() => setLevel("大學部")}>大學部</FilterButton><FilterButton active={level === "研究所"} onClick={() => setLevel("研究所")}>研究所</FilterButton></FilterGroup>
                 <FilterGroup label="授課語言"><FilterButton active={language === "ALL"} onClick={() => setLanguage("ALL")}>全部</FilterButton><FilterButton active={language === "中文"} onClick={() => setLanguage("中文")}>中文</FilterButton><FilterButton active={language === "英文"} onClick={() => setLanguage("英文")}>英文</FilterButton></FilterGroup>
-                <div className="mt-6 rounded-2xl bg-[#f3eff7] p-4"><div className="flex items-center gap-2 text-xs font-bold"><Sparkles size={15} className="text-[#76558f]" />你的推薦偏好</div><div className="mt-3 flex flex-wrap gap-1.5">{["永續", "資料科學", "公共議題", "跨領域"].map((item) => <span key={item} className="rounded-full bg-white px-2.5 py-1 text-[11px] font-medium text-[#625a68]">{item}</span>)}</div><button className="mt-3 flex items-center gap-1 text-xs font-bold text-[#6a3a8c]">調整偏好 <ArrowRight size={12} /></button></div>
               </div>
-            </aside>
+            </aside>}
 
             <div>
-              <div className="mb-4 flex items-end justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#89918e]">Personalized discovery</p><h2 className="mt-1 text-2xl font-bold tracking-tight">為你挑選的課程</h2></div><button className="flex items-center gap-2 rounded-xl border border-black/10 bg-white px-3 py-2 text-xs font-bold xl:hidden" onClick={() => setFiltersOpen((open) => !open)}><SlidersHorizontal size={15} /> 篩選</button></div>
-              <div className="mb-4 flex flex-wrap gap-2"><span className="filter-summary"><University size={13} />{school === "ALL" ? "兩校" : schoolLabel[school]}</span><span className="filter-summary"><GraduationCap size={13} />{level === "ALL" ? "所有層級" : level}</span><span className="filter-summary"><Languages size={13} />{language === "ALL" ? "所有語言" : language}</span><span className="ml-auto self-center text-xs text-[#6d7773]">{catalogStatus}・符合 {filtered.length.toLocaleString("zh-TW")} 門</span></div>
-              {query.trim() && !normalizeNccuCourseCode(query) && filtered.some((course) => !(course.title + course.titleEn + course.code + course.unit + course.tags.join("")).toLowerCase().includes(query.trim().toLowerCase())) && <div className="semantic-hint mb-4 flex items-start gap-2 rounded-2xl border px-4 py-3 text-xs leading-5"><Sparkles size={15} className="mt-0.5 shrink-0" /><span><strong>語意延伸：</strong>「{query.trim()}」可能代表應用開發需求，因此也推薦沒有相同字面的基礎課程。</span></div>}
+              <div className="mb-4 flex items-end justify-between gap-3">
+                <h1 className="text-2xl font-bold tracking-tight">{view === "favorites" ? "我的收藏" : submittedQuery ? "課程推薦" : "探索課程"}</h1>
+                {view === "discover" && <button className="flex items-center gap-2 rounded-xl border border-black/10 bg-white px-3 py-2 text-xs font-bold xl:hidden" onClick={() => setFiltersOpen((open) => !open)}><SlidersHorizontal size={15} /> 篩選</button>}
+              </div>
+              {view === "discover" ? <>
+                <div className="mb-4 flex flex-wrap gap-2"><span className="filter-summary"><University size={13} />{school === "ALL" ? "兩校" : schoolLabel[school]}</span><span className="filter-summary"><GraduationCap size={13} />{level === "ALL" ? "所有層級" : level}</span><span className="filter-summary"><Languages size={13} />{language === "ALL" ? "所有語言" : language}</span><span className="ml-auto self-center text-xs text-[#6d7773]" role="status">{catalogStatus}{searchPending ? "・正在檢索課程簡介與大綱" : `・符合 ${resultCount.toLocaleString("zh-TW")} 門`}</span></div>
+                {currentSearch?.error && <p className="semantic-hint mb-4 rounded-2xl border px-4 py-3 text-sm" role="status">{currentSearch.error}</p>}
+              </> : <p className="mb-4 text-sm text-[#6d7773]">{saved.length} 門課程・收藏儲存在此瀏覽器。</p>}
+              {favoriteStorageError && <p className="semantic-hint mb-4 rounded-2xl border px-4 py-3 text-sm" role="status">此瀏覽器目前無法儲存收藏。</p>}
               <div className="grid gap-4 lg:grid-cols-2">
                 {visibleCourses.map((course) => (
                   <article key={course.id} className={`course-card group ${selected.id === course.id ? "course-card-selected" : ""}`} onClick={() => openCourse(course)}>
-                    <div className="flex items-start justify-between gap-3"><div className="flex items-center gap-2"><SchoolBadge school={course.school} /><span className="text-[11px] font-bold tracking-wide text-[#7d8783]">{course.code}</span></div><button aria-label="收藏課程" className={`icon-button ${saved.includes(course.id) ? "icon-button-saved" : ""}`} onClick={(event) => { event.stopPropagation(); setSaved((items) => items.includes(course.id) ? items.filter((id) => id !== course.id) : [...items, course.id]); }}><Heart size={16} fill={saved.includes(course.id) ? "currentColor" : "none"} /></button></div>
+                    <div className="flex items-start justify-between gap-3"><div className="flex items-center gap-2"><SchoolBadge school={course.school} /><span className="text-[11px] font-bold tracking-wide text-[#7d8783]">{course.code}</span></div><FavoriteButton course={course} saved={saved.includes(course.id)} disabled={!storedFavorites} toggle={toggleFavorite} /></div>
                     <h3 className="mt-4 text-lg font-bold tracking-tight"><button type="button" className="block w-full text-left" onClick={(event) => { event.stopPropagation(); openCourse(course); }}>{course.title}</button></h3><p className="mt-1 line-clamp-1 text-xs text-[#77817d]">{course.titleEn}</p><p className="mt-3 line-clamp-2 text-sm leading-6 text-[#53605c]">{course.summary}</p>
                     <div className="mt-4 flex flex-wrap gap-1.5">{course.tags.map((tag) => <span key={tag} className="tag">{tag}</span>)}</div>
+                    {view === "discover" && recommendations.has(course.id) && <RecommendationEvidence recommendation={recommendations.get(course.id)!} />}
                     <div className="mt-5 space-y-1 border-t border-black/7 pt-4 text-[11px] text-[#6d6872]"><p className="flex items-center gap-1.5"><Clock3 size={12} />{course.latestOfferingTerm ? `${course.latestOfferingTerm} 開課・查看分班時間` : course.time}</p><p className="flex items-center gap-1.5"><BookOpen size={12} />{course.credits} 學分・{course.unit}</p></div>
                   </article>
                 ))}
               </div>
-              {filtered.length > visibleCourses.length && <p className="mt-4 text-center text-xs text-[#7b7480]">目前顯示前 {visibleCourses.length} 門；輸入課名、課號或主題可縮小結果。</p>}
-              {filtered.length === 0 && <div className="rounded-3xl border border-dashed border-black/15 bg-white/50 px-6 py-16 text-center"><Search className="mx-auto text-[#9aa29f]" /><h3 className="mt-3 font-bold">沒有符合條件的課程</h3><p className="mt-1 text-sm text-[#75807c]">試著清除部分篩選條件或換一個關鍵字。</p><button className="mt-4 text-sm font-bold text-[#d65f43]" onClick={resetFilters}>清除全部</button></div>}
+              {view === "discover" && visibleCourses.length > 0 && resultCount > visibleCourses.length && <p className="mt-4 text-center text-sm text-[#7b7480]">目前顯示前 {visibleCourses.length} 門，可用篩選條件縮小結果。</p>}
+              {view === "discover" && !searchPending && filtered.length === 0 && <div className="rounded-3xl border border-dashed border-black/15 bg-white/50 px-6 py-16 text-center"><Search className="mx-auto text-[#9aa29f]" /><h3 className="mt-3 font-bold">{catalogCourses.length ? "沒有符合條件的課程" : catalogStatus}</h3>{catalogCourses.length > 0 && <><p className="mt-1 text-sm text-[#75807c]">試著清除部分篩選條件或換一個關鍵字。</p><button className="mt-4 text-sm font-bold text-[#d65f43]" onClick={resetFilters}>清除全部</button></>}</div>}
+              {view === "favorites" && visibleCourses.length === 0 && <div className="rounded-3xl border border-dashed border-black/15 bg-white/50 px-6 py-16 text-center"><Heart className="mx-auto text-[#9aa29f]" /><h2 className="mt-3 font-bold">{!storedFavorites ? "正在讀取收藏" : !saved.length ? "還沒有收藏的課程" : catalogCourses.length ? "收藏的課程目前未列在課程目錄中" : catalogStatus}</h2><button className="mt-4 text-sm font-bold text-[#d65f43]" onClick={() => setView("discover")}>探索課程</button></div>}
             </div>
           </section>
         ) : <>
+          <SemesterPlanPanel selected={selected} catalog={catalogCourses} completed={transcriptCourses} openDetails={setCourseDetailsOpen} />
           <StudyProfilePanel profile={studyProfile} openTranscript={() => account ? setTranscriptOpen(true) : setAuthPurpose("transcript")} />
           <RecommendationMap key={account?.id ?? "guest"} selected={selected} setSelected={setSelected} compare={compare}
             catalog={catalogCourses} branches={mapBranches} mapName={mapName} setMapName={setMapName}
@@ -517,6 +620,8 @@ export default function Home() {
       }} />}
       {transcriptOpen && account && <TranscriptDialog account={account} close={() => setTranscriptOpen(false)} onSaved={(count) => { setTranscriptOpen(false); setSaveNotice(count); setTranscriptRefresh((value) => value + 1); }} />}
       {courseDetailsOpen && <CourseDetailsModal key={courseDetailsOpen.id} course={courseDetailsOpen}
+        favorite={<FavoriteButton course={courseDetailsOpen} saved={saved.includes(courseDetailsOpen.id)} disabled={!storedFavorites} toggle={toggleFavorite} />}
+        showMap={() => { setSelected(courseDetailsOpen); setCourseDetailsOpen(null); setView("map"); }}
         requestedCode={view === "discover" ? normalizeNccuCourseCode(query) : ""} close={() => setCourseDetailsOpen(null)} />}
       {saveNotice !== null && <SaveSuccessDialog count={saveNotice} close={() => setSaveNotice(null)} />}
     </main>
@@ -744,7 +849,9 @@ function NccuCourseOfferings({ rows, requestedCode }: { rows: NccuOffering[]; re
   </section>;
 }
 
-function CourseDetailsModal({ course, requestedCode, close }: { course: Course; requestedCode: string; close: () => void }) {
+function CourseDetailsModal({ course, requestedCode, favorite, showMap, close }: {
+  course: Course; requestedCode: string; favorite: React.ReactNode; showMap: () => void; close: () => void;
+}) {
   const [detail, setDetail] = useState<CourseApiDetail | null>(null);
   const [status, setStatus] = useState("正在載入課程資料…");
   useEffect(() => {
@@ -766,6 +873,7 @@ function CourseDetailsModal({ course, requestedCode, close }: { course: Course; 
       <h2>{course.title}</h2>
       <p className="course-info-en">{course.titleEn}</p>
       <div className="course-info-meta"><span>{course.unit}</span><span>{course.credits} 學分</span><span>{course.level}</span>{!detail?.offerings?.length && <span>{course.language}</span>}</div>
+      <div className="mt-3 flex items-center gap-3">{favorite}<button className="path-inline-detail" onClick={showMap}><MapIcon size={15} />設為學習地圖目標</button></div>
     </div>
     <div className="course-info-body">
       {status ? <p className="course-info-status">{status}</p> : <>
@@ -789,7 +897,7 @@ function SaveSuccessDialog({ count, close }: { count: number; close: () => void 
 function FilterGroup({ label, children }: { label: string; children: React.ReactNode }) { return <div className="mb-5"><p className="mb-2 text-xs font-bold text-[#64706c]">{label}</p><div className="flex flex-wrap gap-2">{children}</div></div>; }
 function FilterButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) { return <button className={`filter-button ${active ? "filter-button-active" : ""}`} onClick={onClick}>{active && <Check size={11} />}{children}</button>; }
 
-const mapStatusLabel = { passed: "合格", recorded: "有修課紀錄", "no-record": "無成績單紀錄" };
+const mapStatusLabel = { passed: "已符合先修", recorded: "有修課紀錄", "no-record": "無成績單紀錄" };
 
 function MapBranchCard({ branch, targetSchool, setSelected, openDetails }: {
   branch: CourseMapBranch<Course>; targetSchool: School; setSelected: (course: Course) => void;
@@ -808,7 +916,7 @@ function MapBranchCard({ branch, targetSchool, setSelected, openDetails }: {
     <div className="learning-branch-card" data-school={school} data-status={branch.status}>
       <div className="learning-branch-meta">
         <span>{branch.relation === "official" ? "官方先修" : "共同主題"}{school && `・${schoolLabel[school]}`}</span>
-        <span>{branch.status === "passed" && <Check size={12} />}{mapStatusLabel[branch.status]}</span>
+        <span>{branch.status === "passed" && <Check size={12} />}{branch.relation === "related" && branch.status === "passed" ? "已修及格" : mapStatusLabel[branch.status]}</span>
       </div>
       {showOptions ? <details>
         <summary className="learning-branch-conditions">查看可選的 {options.length} 門先修課</summary>
@@ -825,6 +933,7 @@ function MapBranchCard({ branch, targetSchool, setSelected, openDetails }: {
         {actions}
       </>}
       {branch.conditions && <p className="learning-branch-conditions">{branch.conditions}</p>}
+      {branch.topics?.length && <p className="learning-branch-conditions">與目標課同屬「{branch.topics.join("、")}」。</p>}
     </div>
   </div>;
 }
@@ -834,6 +943,7 @@ function LearningPathHero({ selected, branches, setSelected, openDetails, choose
   openDetails: (course: Course) => void; chooseTarget: () => void;
 }) {
   const hasMultipleRequirements = branches.filter((branch) => branch.relation === "official").length > 1;
+  const requirementNotes = getCourseRequirementNotes(selected);
   return <section className="learning-hero rounded-b-[36px] px-5 py-6 sm:px-8 lg:px-10">
     <div className="learning-hero-heading">
       <div>
@@ -864,12 +974,87 @@ function LearningPathHero({ selected, branches, setSelected, openDetails, choose
         <h2>{selected.title}</h2>
         <p>{selected.code}・{selected.unit}</p>
         {hasMultipleRequirements && <p>各組官方先修條件皆須符合。</p>}
+        {requirementNotes.map((note) => <p key={note}>{note}</p>)}
         <button className="path-inline-detail" onClick={() => openDetails(selected)}><BookOpen size={14} />查看課程詳情</button>
       </div>
     </div>
     <div className="learning-map-legend" aria-label="地圖圖例">
       <span><i />官方先修</span><span><i className="legend-advised" />共同主題</span>
     </div>
+    {branches.some(({ relation }) => relation === "related") && <p className="mt-2 text-sm">{sharedTopicExplanation}</p>}
+  </section>;
+}
+
+function SemesterPlanPanel({ selected, catalog, completed, openDetails }: {
+  selected: Course; catalog: Course[]; completed: TranscriptRow[]; openDetails: (course: Course) => void;
+}) {
+  const [curriculumKey, setCurriculumKey] = useState("");
+  const [includeRequired, setIncludeRequired] = useState(true);
+  const curriculum = curricula.find((item) => curriculumId(item) === curriculumKey);
+  const requirements = useMemo(() => curriculum ? resolveCurriculum(curriculum, catalog) : [], [curriculum, catalog]);
+  const matched = useMemo(() => requirements.flatMap(({ course }) => course ? [course] : []), [requirements]);
+  const plan = useMemo(() => buildSemesterPlan(
+    [...new Map([selected, ...(includeRequired ? matched : [])].map((course) => [course.id, course])).values()],
+    catalog, completed,
+  ), [selected, includeRequired, matched, catalog, completed]);
+  const completedRequired = useMemo(() => includeRequired ? plan.complete : buildSemesterPlan(matched, catalog, completed).complete,
+    [includeRequired, plan.complete, matched, catalog, completed]);
+  return <section className="semester-plan mt-6 rounded-3xl border border-black/8 bg-white/80 p-5 shadow-sm sm:p-6">
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div>
+        <h2 className="text-xl font-bold">逐學期修課順序</h2>
+        <p className="mt-1 text-sm leading-6">依已知的官方先修排序。開課、時段與選課資格以校方公告為準。</p>
+      </div>
+      <label className="grid gap-1 text-sm font-semibold">
+        系所與入學年度
+        <select className="rounded-xl border border-black/15 bg-transparent px-3 py-2" value={curriculumKey} onChange={(event) => setCurriculumKey(event.target.value)}>
+          <option value="">只規劃目標課</option>
+          {curricula.map((item) => <option key={curriculumId(item)} value={curriculumId(item)}>
+            {schoolLabel[item.school]}・{item.department}・{item.year} 學年度
+          </option>)}
+        </select>
+      </label>
+    </div>
+    {curriculum && <div className="mt-4 rounded-2xl border border-black/10 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <label className="flex items-center gap-2 text-sm font-semibold">
+          <input type="checkbox" checked={includeRequired} onChange={(event) => setIncludeRequired(event.target.checked)} />將可配對的系定必修納入排程
+        </label>
+        <a className="text-sm font-semibold underline" href={curriculum.source} target="_blank" rel="noreferrer">校方必修科目表</a>
+      </div>
+      <details className="mt-3 text-sm leading-6">
+        <summary className="cursor-pointer font-semibold">查看系定必修・{matched.length} / {requirements.length} 門已配對</summary>
+        <ul className="mt-2 grid gap-x-4 sm:grid-cols-2">
+          {requirements.map(({ title, course }) => <li key={title}>
+            {course ? <button className="text-left underline" onClick={() => openDetails(course)}>{title}</button> : title}
+            <span>・{!course ? "課程待配對" : completedRequired.has(course.id) ? "已修及格" : "未確認及格"}</span>
+          </li>)}
+        </ul>
+        {curriculum.notes.map((note) => <p key={note} className="mt-2">{note}</p>)}
+      </details>
+    </div>}
+    {!curriculum && <p className="mt-3 text-sm">
+      更多系所及年度請查
+      <a className="ml-2 underline" href="https://registra.site.nthu.edu.tw/p/412-1211-1826.php?Lang=zh-tw" target="_blank" rel="noreferrer">清大必修科目表</a>
+      <a className="ml-2 underline" href="https://moltke.nccu.edu.tw/tsreqsub_SSO/login.tsreqsub" target="_blank" rel="noreferrer">政大必修科目查詢</a>
+    </p>}
+    {plan.complete.has(selected.id) && <p className="mt-4 text-sm font-semibold">{selected.title}已修及格。</p>}
+    {(selected.school === "NTHU" || curriculum?.school === "NTHU") && <p className="mt-3 text-sm">現有成績單來源為政大。清大課程的既有修課狀態需自行對照。</p>}
+    <ol className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+      {plan.semesters.map(([semester, entries]) => <li key={semester} className="rounded-2xl border border-black/10 p-4">
+        <h3 className="font-bold">規劃第 {semester} 學期</h3>
+        <ul className="mt-2 space-y-2 text-sm">
+          {entries.map(({ course, target }) => <li key={course.id}>
+            <button className="text-left underline" onClick={() => openDetails(course)}>{course.title}</button>
+            <span>・{schoolLabel[course.school]}・{course.id === selected.id ? "目標課" : target ? "系定必修" : "官方先修"}</span>
+          </li>)}
+        </ul>
+      </li>)}
+    </ol>
+    {plan.notes.length > 0 && <div className="semantic-hint mt-4 rounded-2xl border p-4 text-sm">
+      <h3 className="font-bold">需向校方確認</h3>
+      <ul className="mt-2 list-disc space-y-1 pl-5">{plan.notes.map((note) => <li key={note}>{note}</li>)}</ul>
+    </div>}
   </section>;
 }
 
