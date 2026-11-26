@@ -11,12 +11,24 @@ export type CourseMapBranch<T> = {
   topics?: string[];
 };
 
+export type CourseMapContinuation<T> = { course: T; reason: string } & (
+  { relation: "official"; requirements: string[]; notes: string[] }
+  | { relation: "extension" }
+);
+
 type CourseStatus = CourseMapBranch<MapCourse>["status"];
 type Prerequisite = { title: string; duration: string; completion: string };
 type Requirements = { groups: Prerequisite[][]; review: string[]; audience?: string };
 
 const statusRank: Record<CourseStatus, number> = { "no-record": 0, recorded: 1, passed: 2 };
 const unfinishedGrade = /^(?:W(?:退選|停修|撤選|WITHDRAWN)?|WITHDRAWN|WITHDRAWAL|退選|撤選|停修|棄修|已退選|I|IP|INCOMPLETE|INPROGRESS|PENDING|修課中|修習中|修讀中|選修中|在修|未修畢|未完成|成績未定|尚未登錄|未登錄|未評分|未送出|未公布|待補|待定|待登錄|NA)$/u;
+
+const nccuDataStructuresCourses = new Set(["nccu-306013001", "nccu-703008001"]);
+const nccuDataStructuresExtensions = [
+  { id: "nccu-701788001", reason: "延伸資料結構中的演算法效率分析，練習拆解問題、選擇合適的資料結構並實作解法。" },
+  { id: "nccu-781008001", reason: "從組織程式中的資料延伸到設計關聯式資料庫，練習資料建模、SQL、索引與查詢最佳化。" },
+  { id: "nccu-703045001", reason: "把程式設計、資料結構與演算法用在實際專案，從規劃開始做出可運作的系統。" },
+];
 
 function courseKey(value: string) {
   return value.normalize("NFKC").toLowerCase().replace(/\s+/gu, "").replace(/[‐‑–—−─]/gu, "-");
@@ -233,11 +245,47 @@ export function buildCourseMapBranches<T extends MapCourse>(
   return shown.map(({ course, status, topics }) => ({ key: `related-${course.id}`, requirement: course.title, courses: [course], status, relation: "related", topics }));
 }
 
-export function buildSemesterPlan<T extends MapCourse>(targets: readonly T[], catalog: readonly T[], completed: readonly TranscriptRow[]) {
+export function buildCourseMapContinuations<T extends MapCourse>(selected: T, catalog: readonly T[]): CourseMapContinuation<T>[] {
+  const sameSchool = new Map(catalog.filter((course) => course.school === selected.school).map((course) => [course.id, course]));
+  sameSchool.set(selected.id, selected);
+  const selectedTitle = courseKey(selected.title);
+  const sameTitle = [...sameSchool.values()].filter((course) => courseKey(course.title) === selectedTitle);
+  const official: CourseMapContinuation<T>[] = [];
+
+  for (const course of sameSchool.values()) {
+    if (course.id === selected.id || codeKey(course.code) === codeKey(selected.code)) continue;
+    const { groups } = courseRequirements(course);
+    const matching = groups.filter((group) => group.some(({ title }) => courseKey(title) === selectedTitle));
+    if (!matching.length || resolvePrerequisite(course, sameTitle)?.id !== selected.id) continue;
+
+    official.push({
+      course, relation: "official",
+      reason: matching.some((group) => group.length === 1) ? `校方把「${selected.title}」列為先修。` : `「${selected.title}」是校方列出的擇一先修選項。`,
+      requirements: groups.map((group) => group.map(({ title, duration, completion }) => `${title}（${duration}・${completion}）`).join(" 或 ")),
+      notes: getCourseRequirementNotes(course),
+    });
+  }
+
+  official.sort((a, b) => a.course.title.localeCompare(b.course.title, "zh-Hant") || a.course.id.localeCompare(b.course.id, "en"));
+  if (!nccuDataStructuresCourses.has(selected.id)) return official;
+
+  const officialIds = new Set(official.map(({ course }) => course.id));
+  const extensions = nccuDataStructuresExtensions.flatMap(({ id, reason }): CourseMapContinuation<T>[] => {
+    const course = sameSchool.get(id);
+    return course && !officialIds.has(id) ? [{ course, relation: "extension", reason }] : [];
+  });
+  return [...official, ...extensions];
+}
+
+export type SemesterPlanEdge = { from: string; to: string; alternative: boolean };
+
+export function buildSemesterPlan<T extends MapCourse>(
+  targets: readonly T[], catalog: readonly T[], completed: readonly TranscriptRow[], suggestedSemesters?: ReadonlyMap<string, number>,
+) {
   const unique = [...new Map([...catalog, ...targets].map((course) => [course.id, course])).values()];
   const transcript = indexTranscript(unique, completed).resolved;
   const bySchoolAndTitle = indexCourses(unique, (course) => `${course.school}:${courseKey(course.title)}`);
-  type Group = { label: string; choices: T[]; satisfied: boolean };
+  type Group = { label: string; choices: T[]; satisfied: boolean; alternative: boolean };
   type Node = { course: T; groups: Group[]; notes: string[]; pending: boolean; semester: number };
   const graph = new Map<string, Node>();
   const complete = new Set<string>();
@@ -248,15 +296,16 @@ export function buildSemesterPlan<T extends MapCourse>(targets: readonly T[], ca
     const requirements = courseRequirements(course);
     const groups = requirements.groups.map((alternatives): Group => {
       const label = alternatives.map(({ title, duration }) => duration === "全學年" ? `${title}（全學年）` : title).join(" 或 ");
+      const alternative = alternatives.length > 1;
       const choices: T[] = [];
       for (const requirement of alternatives) {
         if (requirement.duration !== "單學期") continue;
         const linked = resolvePrerequisite(course, bySchoolAndTitle.get(`${course.school}:${courseKey(requirement.title)}`) ?? []);
         if (!linked) continue;
-        if (satisfiesRequirement(requirement, transcript.get(linked.id))) return { label, choices: [], satisfied: true };
+        if (satisfiesRequirement(requirement, transcript.get(linked.id))) return { label, choices: [], satisfied: true, alternative };
         choices.push(linked);
       }
-      return { label, choices, satisfied: false };
+      return { label, choices, satisfied: false, alternative };
     });
     graph.set(course.id, {
       course, groups, notes: getCourseRequirementNotes(course),
@@ -285,7 +334,8 @@ export function buildSemesterPlan<T extends MapCourse>(targets: readonly T[], ca
     for (const node of graph.values()) {
       if (node.pending) continue;
       const prerequisites = node.groups.filter(({ satisfied }) => !satisfied);
-      const semester = 1 + Math.max(0, ...prerequisites.map((group) => earliestChoice(group)?.semester ?? Infinity));
+      const afterPrerequisites = 1 + Math.max(0, ...prerequisites.map((group) => earliestChoice(group)?.semester ?? Infinity));
+      const semester = Math.max(suggestedSemesters?.get(node.course.id) ?? 1, afterPrerequisites);
       if (semester < node.semester) {
         node.semester = semester;
         changed = true;
@@ -297,6 +347,7 @@ export function buildSemesterPlan<T extends MapCourse>(targets: readonly T[], ca
   const visited = new Set<string>();
   const notes = new Set<string>();
   const semesters = new Map<number, { course: T; target: boolean }[]>();
+  const edges = new Map<string, SemesterPlanEdge>();
   function include(node: Node, visiting: ReadonlySet<string>) {
     const { course, semester } = node;
     if (visiting.has(course.id)) {
@@ -315,8 +366,13 @@ export function buildSemesterPlan<T extends MapCourse>(targets: readonly T[], ca
     for (const group of node.groups) {
       if (group.satisfied) continue;
       const choice = earliestChoice(group);
-      if (choice) include(choice, path);
-      else {
+      if (choice) {
+        if (Number.isFinite(semester) && choice.semester < semester) {
+          const key = `${choice.course.id}:${course.id}`;
+          if (edges.get(key)?.alternative !== false) edges.set(key, { from: choice.course.id, to: course.id, alternative: group.alternative });
+        }
+        include(choice, path);
+      } else {
         notes.add(`${course.title}・待確認先修「${group.label}」`);
         if (group.choices.length === 1) include(graph.get(group.choices[0].id)!, path);
       }
@@ -326,5 +382,5 @@ export function buildSemesterPlan<T extends MapCourse>(targets: readonly T[], ca
     const node = graph.get(course.id);
     if (node) include(node, new Set());
   }
-  return { semesters: [...semesters].sort(([a], [b]) => a - b), complete, notes: [...notes] };
+  return { semesters: [...semesters].sort(([a], [b]) => a - b), edges: [...edges.values()], complete, notes: [...notes] };
 }

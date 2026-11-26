@@ -1,12 +1,65 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCourseMapBranches, buildSemesterPlan, getCourseRequirementNotes } from "../lib/course-map.ts";
+import { buildCourseMapBranches, buildCourseMapContinuations, buildSemesterPlan, getCourseRequirementNotes } from "../lib/course-map.ts";
 
 const course = (code, title, properties = {}) => ({
   id: `nccu-${code}`, school: "NCCU", code, title, level: "大學部", domains: [], ...properties,
 });
 const transcript = (courseCode, courseName, gradeRaw, term = "114-1") => ({ courseCode, courseName, gradeRaw, term });
 const sharedDomains = (left, right) => left.domains.filter((domain) => right.domains.includes(domain));
+
+test("uses recommended semesters and returns only the official prerequisite links used by the plan", () => {
+  const base = course("308003011", "民法概要");
+  const alternative = course("308014001", "民法（一）");
+  const insurance = course("308001001", "保險學");
+  const followUp = course("308041001", "保險契約法", {
+    prerequisites: "[民法概要(單學期)(修習且及格) 或 民法（一）(單學期)(修習且及格)] 及 [保險學(單學期)(修習且及格)]",
+  });
+  const catalog = [base, alternative, insurance, followUp];
+  const recommended = new Map([[followUp.id, 4], [insurance.id, 2], [alternative.id, 3]]);
+  const plan = buildSemesterPlan([followUp], catalog, [], recommended);
+  assert.deepEqual(plan.semesters.map(([term, entries]) => [term, entries.map(({ course }) => course.id)]), [
+    [1, [base.id]], [2, [insurance.id]], [4, [followUp.id]],
+  ]);
+  assert.deepEqual(plan.edges, [
+    { from: base.id, to: followUp.id, alternative: true },
+    { from: insurance.id, to: followUp.id, alternative: false },
+  ]);
+  const withCredit = buildSemesterPlan([followUp], catalog, [transcript(base.code, base.title, "P")], recommended);
+  assert.deepEqual(withCredit.edges.map(({ from }) => from), [insurance.id]);
+});
+
+test("finds same-school downstream courses while preserving alternatives and other prerequisites", () => {
+  const base = course("308003011", "民法概要");
+  const namesake = course("209003011", "民法概要");
+  const followUp = course("308041001", "保險契約法", {
+    prerequisites: "[民法概要(單學期)(有修即可) 或 民法（一）(單學期)(修習且及格)] 及 [保險學(全學年)(修習且及格)]",
+  });
+  const ambiguous = course("000041001", "專題", { prerequisites: followUp.prerequisites });
+  const otherSchool = { ...followUp, id: "nthu-other", school: "NTHU" };
+  const relatedOnly = course("308043001", "進階民法概要");
+  const results = buildCourseMapContinuations(base, [namesake, followUp, ambiguous, otherSchool, relatedOnly]);
+
+  assert.deepEqual(results.map(({ course, relation }) => [course.id, relation]), [[followUp.id, "official"]]);
+  assert.match(results[0].reason, /擇一/);
+  assert.deepEqual(results[0].requirements, ["民法概要（單學期・有修即可） 或 民法（一）（單學期・修習且及格）", "保險學（全學年・修習且及格）"]);
+  assert.deepEqual(buildCourseMapContinuations(namesake, [base, followUp]), []);
+});
+
+test("uses reviewed syllabus extensions for NCCU data structures and prefers an official link for the same course", () => {
+  const base = course("306013001", "資料結構");
+  const algorithms = course("701788001", "演算法", { prerequisites: "[資料結構(單學期)(修習且及格)]" });
+  const databases = course("781008001", "資料庫應用");
+  const project = course("703045001", "資訊專題（B）");
+  const broadTopic = course("042217001", "AI、性別與勞動");
+  const results = buildCourseMapContinuations(base, [project, broadTopic, algorithms, databases]);
+
+  assert.deepEqual(results.map(({ course, relation }) => [course.id, relation]), [
+    [algorithms.id, "official"], [databases.id, "extension"], [project.id, "extension"],
+  ]);
+  assert.match(results[1].reason, /SQL/);
+  assert.deepEqual(buildCourseMapContinuations(broadTopic, [base, algorithms, databases]), []);
+});
 
 test("parses NCCU's insurance contract law requirements as AND groups with alternatives", () => {
   const target = course("308041001", "保險契約法", {

@@ -210,11 +210,6 @@ export const departmentMascots = {
   運動產業與文化學士學位學程: { label: "運動跑鞋", symbol: "👟" },
 } satisfies Record<DepartmentName, { label: string; symbol: string }>;
 
-export const mascotGroups = units.map(([college, departments]) => ({
-  college,
-  mascots: departments.map(([department]) => ({ department, ...departmentMascots[department] })),
-}));
-
 export function mascotIconPath(symbol: string, directory: "mascot-icons" | "mascot-results" = "mascot-icons") {
   const code = [...symbol.replace(/[\uFE0E\uFE0F]/gu, "")]
     .map((character) => character.codePointAt(0)!.toString(16)).join("-");

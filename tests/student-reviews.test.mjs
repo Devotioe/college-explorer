@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import published from "../data/dcard/processed/published.json" with { type: "json" };
+import { filterTeacherReviewsByYear, getReviewAcademicYears, unknownReviewAcademicYear } from "../lib/review-academic-years.ts";
 import { indexPublishedReviews, indexTeacherReviews, reviewsForCourse } from "../lib/student-reviews.ts";
 
 const valid = {
@@ -72,4 +73,23 @@ test("the bundled reviews are retrievable by course and courses without entries 
   const courseIds = new Set(published.map((row) => row.courseId));
   assert.equal([...courseIds].reduce((total, id) => total + reviewsForCourse(id).length, 0), published.length);
   assert.deepEqual(reviewsForCourse("nccu-no-reviews"), []);
+});
+
+test("a selected academic year shows only that year's entries and sources", () => {
+  const groups = indexTeacherReviews([
+    { ...valid, id: "previous-year", semester: "113-1" },
+    valid,
+    { ...valid, id: "second-semester", semester: "114-2" },
+    { ...valid, id: "unknown-year", teacher: "李小文", semester: "" },
+  ]).get(valid.courseId);
+
+  assert.deepEqual(getReviewAcademicYears(groups), ["114", "113", unknownReviewAcademicYear]);
+  assert.deepEqual(filterTeacherReviewsByYear(groups, ""), []);
+
+  const thisYear = filterTeacherReviewsByYear(groups, "114");
+  assert.deepEqual(thisYear.map((group) => group.teacher), [valid.teacher]);
+  assert.equal(thisYear[0].posts.length, 1);
+  assert.deepEqual(thisYear[0].posts[0].entries.map((entry) => entry.semester), ["114-1", "114-2"]);
+  assert.deepEqual(filterTeacherReviewsByYear(groups, "113")[0].posts[0].entries.map((entry) => entry.id), ["previous-year"]);
+  assert.deepEqual(filterTeacherReviewsByYear(groups, unknownReviewAcademicYear).map((group) => group.teacher), ["李小文"]);
 });

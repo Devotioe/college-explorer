@@ -33,13 +33,15 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { SemesterPlanMap } from "../components/semester-plan-map";
 import { TranscriptDialog } from "../components/transcript-dialog";
-import { buildCourseMapBranches, buildSemesterPlan, getCourseRequirementNotes, type CourseMapBranch } from "../lib/course-map";
+import { buildCourseMapBranches, buildCourseMapContinuations, buildSemesterPlan, getCourseRequirementNotes, type CourseMapBranch, type CourseMapContinuation } from "../lib/course-map";
 import type { CourseRecommendation } from "../lib/course-recommendations";
 import { curricula, curriculumId, resolveCurriculum } from "../lib/curricula";
 import { normalizeNccuCourseCode } from "../lib/nccu-course-code.mjs";
 import type { NccuOffering } from "../lib/nccu-offerings";
-import { buildNccuStudyProfile, mascotGroups, mascotIconPath } from "../lib/nccu-study-profile";
+import { buildNccuStudyProfile, mascotIconPath } from "../lib/nccu-study-profile";
+import { filterTeacherReviewsByYear, getReviewAcademicYears, unknownReviewAcademicYear } from "../lib/review-academic-years";
 import type { ReviewDetails, TeacherReviewGroup } from "../lib/student-reviews";
 import { initialTheme, readStoredTheme, type Theme } from "../lib/theme";
 import type { TranscriptHistory, TranscriptRow } from "../lib/transcript-review";
@@ -505,6 +507,10 @@ export default function Home() {
     () => view === "map" ? buildCourseMapBranches(selected, catalogCourses, transcriptCourses, sharedDomains) : [],
     [view, selected, catalogCourses, transcriptCourses],
   );
+  const mapContinuations = useMemo(
+    () => view === "map" ? buildCourseMapContinuations(selected, catalogCourses) : [],
+    [view, selected, catalogCourses],
+  );
   const studyProfile = useMemo(
     () => catalogCourses.length ? buildNccuStudyProfile(transcriptCourses, catalogCourses) : null,
     [catalogCourses, transcriptCourses],
@@ -513,6 +519,10 @@ export default function Home() {
   const openCourse = (course: Course) => {
     setSelected(course);
     setCourseDetailsOpen(course);
+  };
+  const openTranscriptFlow = () => {
+    if (account) setTranscriptOpen(true);
+    else setAuthPurpose("transcript");
   };
 
   const resetFilters = () => { setSchool("ALL"); setLevel("ALL"); setLanguage("ALL"); setQuery(""); setSubmittedQuery(""); };
@@ -544,7 +554,7 @@ export default function Home() {
             <GitCompareArrows size={17} /><span className="hidden md:inline">自行比較</span><span className="rounded-full bg-[#4f5eb3] px-1.5 py-0.5 text-[10px] text-white">{compare.length}</span>
           </button>
           {account ? <>
-            <button className="account-upload-button" onClick={() => setTranscriptOpen(true)}><UploadCloud size={16} /><span className="hidden lg:inline">上傳成績單</span></button>
+            {view !== "map" && <button className="account-upload-button" aria-label="上傳成績單" onClick={openTranscriptFlow}><UploadCloud size={16} /><span className="hidden lg:inline">上傳成績單</span></button>}
             <div className="account-chip">
               <span className="account-avatar">
                 {departmentMascot
@@ -570,7 +580,7 @@ export default function Home() {
             <p className="mt-3 flex items-center gap-2 text-xs text-white/60"><Sparkles size={13} />不必輸入完整課名，例如 APP 也能找到「程式設計一」。</p>
           </div>
           <div className="hero-orbit hidden lg:block" aria-hidden="true"><span className="orbit-ring orbit-one" /><span className="orbit-ring orbit-two" /><span className="orbit-dot dot-one" /><span className="orbit-dot dot-two" /><span className="orbit-dot dot-three" /><span className="orbit-center"><Sparkles size={24} /></span></div>
-        </section> : view === "map" ? <LearningPathHero selected={selected} branches={mapBranches} setSelected={setSelected} openDetails={setCourseDetailsOpen} chooseTarget={() => setView("discover")} /> : null}
+        </section> : view === "map" ? <LearningPathHero selected={selected} branches={mapBranches} continuations={mapContinuations} setSelected={setSelected} openDetails={setCourseDetailsOpen} chooseTarget={() => setView("discover")} openTranscript={openTranscriptFlow} /> : null}
 
         <div className="mt-5 flex sm:hidden"><button className={`mobile-tab ${view === "discover" ? "mobile-tab-active" : ""}`} onClick={() => setView("discover")}><Compass size={16} />探索</button><button className={`mobile-tab ${view === "map" ? "mobile-tab-active" : ""}`} onClick={() => setView("map")}><MapIcon size={16} />學習路徑</button><button className={`mobile-tab ${view === "favorites" ? "mobile-tab-active" : ""}`} onClick={() => setView("favorites")}><Heart size={16} />收藏{saved.length > 0 && ` ${saved.length}`}</button></div>
 
@@ -613,7 +623,7 @@ export default function Home() {
           </section>
         ) : <>
           <SemesterPlanPanel selected={selected} catalog={catalogCourses} completed={transcriptCourses} openDetails={setCourseDetailsOpen} />
-          <StudyProfilePanel profile={studyProfile} openTranscript={() => account ? setTranscriptOpen(true) : setAuthPurpose("transcript")} />
+          <StudyProfilePanel profile={studyProfile} />
           <RecommendationMap key={account?.id ?? "guest"} selected={selected} setSelected={setSelected} compare={compare}
             catalog={catalogCourses} branches={mapBranches} mapName={mapName} setMapName={setMapName}
             openSignIn={() => setAuthPurpose("map")} />
@@ -713,20 +723,36 @@ const reviewDetailLabels: [keyof ReviewDetails, string][] = [
 ];
 
 function TeacherReviews({ groups }: { groups: TeacherReviewGroup[] }) {
+  const [year, setYear] = useState("");
   const [teacher, setTeacher] = useState("");
-  const shown = teacher ? groups.filter((group) => group.teacher === teacher) : groups;
+  const years = getReviewAcademicYears(groups);
+  const reviewsForYear = filterTeacherReviewsByYear(groups, year);
+  const shown = teacher ? reviewsForYear.filter((group) => group.teacher === teacher) : reviewsForYear;
   return <section className="course-teacher-reviews" aria-labelledby="course-teacher-reviews-title">
     <div className="course-teacher-reviews-heading">
       <div>
         <h3 id="course-teacher-reviews-title">Dcard 教師評價</h3>
         {!groups.length && <p>這門課目前沒有可核對的 Dcard 教師心得。</p>}
       </div>
-      {groups.length > 1 && <label>教師
-        <select value={teacher} onChange={(event) => setTeacher(event.target.value)}>
-          <option value="">所有教師</option>
-          {groups.map((group) => <option key={group.teacher} value={group.teacher}>{group.teacher}</option>)}
-        </select>
-      </label>}
+      {years.length > 0 && <div className="course-teacher-review-filters">
+        <label>評價學年
+          <select value={year} onChange={(event) => {
+            setYear(event.target.value);
+            setTeacher("");
+          }}>
+            <option value="">請選擇學年</option>
+            {years.map((option) => <option key={option} value={option}>
+              {option === unknownReviewAcademicYear ? "學年未註明" : `${option} 學年`}
+            </option>)}
+          </select>
+        </label>
+        {reviewsForYear.length > 1 && <label>教師
+          <select value={teacher} onChange={(event) => setTeacher(event.target.value)}>
+            <option value="">所有教師</option>
+            {reviewsForYear.map((group) => <option key={group.teacher} value={group.teacher}>{group.teacher}</option>)}
+          </select>
+        </label>}
+      </div>}
     </div>
     {shown.map((group) => <div key={group.teacher} className="course-teacher-review-group">
       <div className="course-teacher-review-meta">
@@ -755,7 +781,7 @@ function TeacherReviews({ groups }: { groups: TeacherReviewGroup[] }) {
         </li>)}
       </ol>
     </div>)}
-    {groups.length > 0 && <p className="course-teacher-review-note">心得是學生的個人經驗，課程安排與評量可能隨學期或教師調整。</p>}
+    {shown.length > 0 && <p className="course-teacher-review-note">心得是學生的個人經驗，課程安排與評量可能隨學期或教師調整。</p>}
   </section>;
 }
 
@@ -867,34 +893,65 @@ function MapBranchCard({ branch, targetSchool, setSelected, openDetails }: {
   </div>;
 }
 
-function LearningPathHero({ selected, branches, setSelected, openDetails, chooseTarget }: {
-  selected: Course; branches: CourseMapBranch<Course>[]; setSelected: (course: Course) => void;
-  openDetails: (course: Course) => void; chooseTarget: () => void;
+function LearningContinuations({ continuations, openDetails, setSelected }: {
+  continuations: CourseMapContinuation<Course>[]; openDetails: (course: Course) => void; setSelected: (course: Course) => void;
 }) {
-  const hasMultipleRequirements = branches.filter((branch) => branch.relation === "official").length > 1;
+  return <section className="learning-continuations" aria-labelledby="learning-continuations-title">
+    <h2 id="learning-continuations-title" className="learning-column-title">後續可修</h2>
+    {continuations.length ? <ul className="learning-continuation-list">
+      {continuations.map((item) => <li key={item.course.id} className="learning-branch-card" data-school={item.course.school}>
+        <div className="learning-continuation-meta">
+          <span>{item.relation === "official" ? "官方先修關聯" : "大綱延伸建議"}</span>
+          <span>{schoolLabel[item.course.school]}・{item.course.unit}</span>
+        </div>
+        <button className="learning-branch-title" onClick={() => openDetails(item.course)}>{item.course.title}</button>
+        <p className="learning-continuation-reason">{item.reason}</p>
+        {item.relation === "official" && <details className="learning-continuation-requirements">
+          <summary>查看完整先修條件</summary>
+          {item.requirements.length > 1 && <p>各組條件皆須符合。</p>}
+          <ul>{item.requirements.map((requirement, index) => <li key={index}>{requirement}</li>)}</ul>
+          {item.notes.map((note) => <p key={note}>{note}</p>)}
+        </details>}
+        <div className="learning-branch-actions">
+          <button onClick={() => setSelected(item.course)} aria-label={`將${item.course.title}設為目標`}>設為目標</button>
+        </div>
+      </li>)}
+    </ul> : <p className="learning-branch-empty">目前沒有已確認的後續課程。</p>}
+  </section>;
+}
+
+function LearningPathHero({ selected, branches, continuations, setSelected, openDetails, chooseTarget, openTranscript }: {
+  selected: Course; branches: CourseMapBranch<Course>[]; continuations: CourseMapContinuation<Course>[]; setSelected: (course: Course) => void;
+  openDetails: (course: Course) => void; chooseTarget: () => void; openTranscript: () => void;
+}) {
+  const prerequisites = branches.filter((branch) => branch.relation === "official");
+  const continuationIds = new Set(continuations.map(({ course }) => course.id));
+  const related = branches.filter((branch) => branch.relation === "related" && !branch.courses.some(({ id }) => continuationIds.has(id)));
   const requirementNotes = getCourseRequirementNotes(selected);
   return <section className="learning-hero rounded-b-[36px] px-5 py-6 sm:px-8 lg:px-10">
+    <button type="button" className="primary-action mb-4" onClick={openTranscript}>
+      <UploadCloud size={17} aria-hidden="true" />上傳成績單
+    </button>
     <div className="learning-hero-heading">
       <div>
         <h1>課程地圖</h1>
-        <p>查看目標課的先修科目、相關課程與修課狀態。</p>
+        <p>查看目標課的官方先修、後續可修課程與修課狀態。</p>
       </div>
       <button className="map-choose-target" onClick={chooseTarget}><Search size={16} />探索其他目標</button>
     </div>
     <div className="learning-graph">
-      <div className="learning-branches">
-        {branches.length ? branches.map((branch) => <MapBranchCard key={branch.key}
-          branch={branch} targetSchool={selected.school} setSelected={setSelected} openDetails={openDetails} />)
-          : <p className="learning-branch-empty">目前沒有可連到這門課的先修或相關課程。</p>}
-      </div>
+      <section className="learning-prerequisites" aria-labelledby="learning-prerequisites-title">
+        <h2 id="learning-prerequisites-title" className="learning-column-title">官方先修</h2>
+        {prerequisites.length ? <div className="learning-branches">
+          {prerequisites.map((branch) => <MapBranchCard key={branch.key}
+            branch={branch} targetSchool={selected.school} setSelected={setSelected} openDetails={openDetails} />)}
+        </div> : <p className="learning-branch-empty">{requirementNotes.length ? "先修條件請以校方資料為準。" : "目前未列先修條件。"}</p>}
+      </section>
       <div className="learning-graph-connectors" aria-hidden="true">
         <svg viewBox="0 0 100 100" preserveAspectRatio="none">
-          {branches.map((branch, index) => {
-            const y = (index + 0.5) * 100 / branches.length;
-            return <g key={branch.key} data-relation={branch.relation} data-status={branch.status}>
-              <path className="desktop-branch" d={`M0 ${y} C44 ${y} 56 50 100 50`} />
-              <path className="mobile-branch" d={`M0 ${y} H24 Q75 ${y} 75 ${Math.min(y + 5, 98)} V100`} />
-            </g>;
+          {prerequisites.map((branch, index) => {
+            const y = (index + 0.5) * 100 / prerequisites.length;
+            return <path key={branch.key} data-status={branch.status} d={`M0 ${y} C44 ${y} 56 50 100 50`} />;
           })}
         </svg>
       </div>
@@ -902,15 +959,21 @@ function LearningPathHero({ selected, branches, setSelected, openDetails, choose
         <div className="learning-goal-meta"><span>目標課程</span><span>{schoolLabel[selected.school]}</span></div>
         <h2>{selected.title}</h2>
         <p>{selected.code}・{selected.unit}</p>
-        {hasMultipleRequirements && <p>各組官方先修條件皆須符合。</p>}
+        {prerequisites.length > 1 && <p>各組官方先修條件皆須符合。</p>}
         {requirementNotes.map((note) => <p key={note}>{note}</p>)}
         <button className="path-inline-detail" onClick={() => openDetails(selected)}><BookOpen size={14} />查看課程詳情</button>
       </div>
+      <div className="learning-forward-arrow" aria-hidden="true">{continuations.length > 0 && <ArrowRight size={20} />}</div>
+      <LearningContinuations continuations={continuations} openDetails={openDetails} setSelected={setSelected} />
     </div>
-    <div className="learning-map-legend" aria-label="地圖圖例">
-      <span><i />官方先修</span><span><i className="legend-advised" />共同主題</span>
-    </div>
-    {branches.some(({ relation }) => relation === "related") && <p className="mt-2 text-sm">{sharedTopicExplanation}</p>}
+    {related.length > 0 && <details className="learning-related-topics">
+      <summary>探索共同主題</summary>
+      <p>{sharedTopicExplanation}</p>
+      <div className="learning-related-grid">
+        {related.map((branch) => <MapBranchCard key={branch.key}
+          branch={branch} targetSchool={selected.school} setSelected={setSelected} openDetails={openDetails} />)}
+      </div>
+    </details>}
   </section>;
 }
 
@@ -918,76 +981,61 @@ function SemesterPlanPanel({ selected, catalog, completed, openDetails }: {
   selected: Course; catalog: Course[]; completed: TranscriptRow[]; openDetails: (course: Course) => void;
 }) {
   const [curriculumKey, setCurriculumKey] = useState("");
-  const [includeRequired, setIncludeRequired] = useState(true);
   const curriculum = curricula.find((item) => curriculumId(item) === curriculumKey);
   const requirements = useMemo(() => curriculum ? resolveCurriculum(curriculum, catalog) : [], [curriculum, catalog]);
   const matched = useMemo(() => requirements.flatMap(({ course }) => course ? [course] : []), [requirements]);
-  const plan = useMemo(() => buildSemesterPlan(
-    [...new Map([selected, ...(includeRequired ? matched : [])].map((course) => [course.id, course])).values()],
-    catalog, completed,
-  ), [selected, includeRequired, matched, catalog, completed]);
-  const completedRequired = useMemo(() => includeRequired ? plan.complete : buildSemesterPlan(matched, catalog, completed).complete,
-    [includeRequired, plan.complete, matched, catalog, completed]);
+  const suggestedSemesters = useMemo(() => new Map(requirements.flatMap(({ course, semester }) => (
+    course && semester ? [[course.id, semester] as const] : []
+  ))), [requirements]);
+  const plan = useMemo(() => buildSemesterPlan(curriculum ? matched : [selected], catalog, completed, suggestedSemesters),
+    [curriculum, matched, selected, catalog, completed, suggestedSemesters]);
+  const plannedIds = new Set(plan.semesters.flatMap(([, entries]) => entries.map(({ course }) => course.id)));
+  const pending = requirements.flatMap(({ title, course, semester }) => {
+    if (!semester || (course && (plannedIds.has(course.id) || plan.complete.has(course.id)))) return [];
+    return [{ title, semester, reason: course ? "先修條件待確認" : "課程待配對" }];
+  });
+  const notes = [...(curriculum?.notes ?? []), ...plan.notes];
+  const schools: School[] = ["NCCU", "NTHU"];
   return <section className="semester-plan mt-6 rounded-3xl border border-black/8 bg-white/80 p-5 shadow-sm sm:p-6">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h2 className="text-xl font-bold">逐學期修課順序</h2>
-        <p className="mt-1 text-sm leading-6">依已知的官方先修排序。開課、時段與選課資格以校方公告為準。</p>
+        <h2 className="text-xl font-bold">逐學期課程地圖</h2>
+        <p className="mt-1 text-sm leading-6">從左到右查看修課順序。規劃依據為已知先修條件及已核對的建議學期。</p>
       </div>
       <label className="grid gap-1 text-sm font-semibold">
         系所與入學年度
         <select className="rounded-xl border border-black/15 bg-transparent px-3 py-2" value={curriculumKey} onChange={(event) => setCurriculumKey(event.target.value)}>
           <option value="">只規劃目標課</option>
-          {curricula.map((item) => <option key={curriculumId(item)} value={curriculumId(item)}>
-            {schoolLabel[item.school]}・{item.department}・{item.year} 學年度
-          </option>)}
+          {schools.map((school) => <optgroup key={school} label={schoolLabel[school]}>
+            {curricula.filter((item) => item.school === school).map((item) => <option key={curriculumId(item)} value={curriculumId(item)}>
+              {item.department}・{item.year} 學年度
+            </option>)}
+          </optgroup>)}
         </select>
       </label>
     </div>
-    {curriculum && <div className="mt-4 rounded-2xl border border-black/10 p-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <label className="flex items-center gap-2 text-sm font-semibold">
-          <input type="checkbox" checked={includeRequired} onChange={(event) => setIncludeRequired(event.target.checked)} />將可配對的系定必修納入排程
-        </label>
-        <a className="text-sm font-semibold underline" href={curriculum.source} target="_blank" rel="noreferrer">校方必修科目表</a>
-      </div>
-      <details className="mt-3 text-sm leading-6">
-        <summary className="cursor-pointer font-semibold">查看系定必修・{matched.length} / {requirements.length} 門已配對</summary>
-        <ul className="mt-2 grid gap-x-4 sm:grid-cols-2">
-          {requirements.map(({ title, course }) => <li key={title}>
-            {course ? <button className="text-left underline" onClick={() => openDetails(course)}>{title}</button> : title}
-            <span>・{!course ? "課程待配對" : completedRequired.has(course.id) ? "已修及格" : "未確認及格"}</span>
-          </li>)}
-        </ul>
-        {curriculum.notes.map((note) => <p key={note} className="mt-2">{note}</p>)}
-      </details>
-    </div>}
-    {!curriculum && <p className="mt-3 text-sm">
+    {curriculum ? <p className="mt-3 flex flex-wrap items-center justify-between gap-2 text-sm">
+      <strong>{schoolLabel[curriculum.school]}・{curriculum.department}・{curriculum.year} 學年度</strong>
+      <a className="font-semibold underline" href={curriculum.source} target="_blank" rel="noreferrer">校方必修科目表</a>
+    </p> : <p className="mt-3 text-sm">
       更多系所及年度請查
       <a className="ml-2 underline" href="https://registra.site.nthu.edu.tw/p/412-1211-1826.php?Lang=zh-tw" target="_blank" rel="noreferrer">清大必修科目表</a>
       <a className="ml-2 underline" href="https://moltke.nccu.edu.tw/tsreqsub_SSO/login.tsreqsub" target="_blank" rel="noreferrer">政大必修科目查詢</a>
     </p>}
-    {plan.complete.has(selected.id) && <p className="mt-4 text-sm font-semibold">{selected.title}已修及格。</p>}
-    {(selected.school === "NTHU" || curriculum?.school === "NTHU") && <p className="mt-3 text-sm">現有成績單來源為政大。清大課程的既有修課狀態需自行對照。</p>}
-    <ol className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-      {plan.semesters.map(([semester, entries]) => <li key={semester} className="rounded-2xl border border-black/10 p-4">
-        <h3 className="font-bold">規劃第 {semester} 學期</h3>
-        <ul className="mt-2 space-y-2 text-sm">
-          {entries.map(({ course, target }) => <li key={course.id}>
-            <button className="text-left underline" onClick={() => openDetails(course)}>{course.title}</button>
-            <span>・{schoolLabel[course.school]}・{course.id === selected.id ? "目標課" : target ? "系定必修" : "官方先修"}</span>
-          </li>)}
-        </ul>
-      </li>)}
-    </ol>
-    {plan.notes.length > 0 && <div className="semantic-hint mt-4 rounded-2xl border p-4 text-sm">
+    {!curriculum && plan.complete.has(selected.id) && <p className="mt-4 text-sm font-semibold">{selected.title}已修及格。</p>}
+    {(curriculum?.school ?? selected.school) === "NTHU" && <p className="mt-3 text-sm">現有成績單來源為政大。清大課程的既有修課狀態需自行對照。</p>}
+    <SemesterPlanMap semesters={plan.semesters} edges={plan.edges} pending={pending} selectedId={curriculum ? undefined : selected.id} openDetails={openDetails} />
+    {(plan.semesters.length > 0 || pending.length > 0)
+      ? <p className="mt-3 text-sm">實際開課、時段與選課資格以校方公告為準。</p>
+      : curriculum && <p className="mt-3 text-sm">目前沒有可排入地圖的未完成課程。</p>}
+    {notes.length > 0 && <div className="semantic-hint mt-4 rounded-2xl border p-4 text-sm">
       <h3 className="font-bold">需向校方確認</h3>
-      <ul className="mt-2 list-disc space-y-1 pl-5">{plan.notes.map((note) => <li key={note}>{note}</li>)}</ul>
+      <ul className="mt-2 list-disc space-y-1 pl-5">{notes.map((note) => <li key={note}>{note}</li>)}</ul>
     </div>}
   </section>;
 }
 
-function StudyProfilePanel({ profile, openTranscript }: { profile: ReturnType<typeof buildNccuStudyProfile> | null; openTranscript: () => void }) {
+function StudyProfilePanel({ profile }: { profile: ReturnType<typeof buildNccuStudyProfile> | null }) {
   const mascot = profile?.departmentMascot;
   const titles = profile?.titles.filter((title) => title !== mascot?.label) ?? [];
   const departments = profile?.departments ?? [];
@@ -1003,7 +1051,6 @@ function StudyProfilePanel({ profile, openTranscript }: { profile: ReturnType<ty
         <h2 id="study-profile-title">政大修課分布</h2>
         <p>{profile?.countedCount ? `共 ${profile.countedCount} 門課，${profile.unclassifiedCount} 門尚未分類。同一門課只計一次。` : "儲存政大成績單後，就能查看各學院和系所修了幾門課。"}</p>
       </div>
-      <button className="map-choose-target" onClick={openTranscript}><UploadCloud size={16} />上傳成績單</button>
     </header>
     {!!profile?.countedCount && <>
       {mascot ? <section className="study-profile-mascot" aria-labelledby="study-mascot-title">
@@ -1012,6 +1059,7 @@ function StudyProfilePanel({ profile, openTranscript }: { profile: ReturnType<ty
           <h3 id="study-mascot-title">修課吉祥物</h3>
           <strong>{mascot.label}</strong>
           <p>{mascot.name}修課最多，共 {mascot.count} 門。</p>
+          <a className="study-profile-mascot-credit" href="/mascot-icons/NOTICE.txt">圖示來源與授權</a>
         </div>
       </section> : departments.length > 1 && <p className="study-profile-mascot-tie">
         {departments.filter(({ count }) => count === departments[0].count).map(({ name }) => name).join("、")}並列最多。吉祥物會在單一系所領先時顯示。
@@ -1024,19 +1072,6 @@ function StudyProfilePanel({ profile, openTranscript }: { profile: ReturnType<ty
         <section><h3>依系所</h3>{counts(profile.departments)}</section>
       </div>
     </>}
-    <details className="study-profile-mascot-gallery">
-      <summary>查看所有系所吉祥物</summary>
-      {mascotGroups.map(({ college, mascots }) => <section key={college} className="mascot-gallery-group">
-        <h3>{college}</h3>
-        <ul className="mascot-gallery-grid">
-          {mascots.map(({ department, label, symbol }) => <li key={department}>
-            <img src={mascotIconPath(symbol)} alt="" width={32} height={32} loading="lazy" />
-            <div><strong>{label}</strong><span>{department}</span></div>
-          </li>)}
-        </ul>
-      </section>)}
-      <a className="mascot-gallery-credit" href="/mascot-icons/NOTICE.txt">圖示來源與授權</a>
-    </details>
   </section>;
 }
 
