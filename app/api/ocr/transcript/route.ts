@@ -1,10 +1,22 @@
 import { env } from "cloudflare:workers";
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getCurrentPasswordUser } from "../../../../lib/password-auth";
 import { matchNccuCourse } from "../../../../lib/nccu-course-match";
+import { normalizeTranscriptTerm } from "../../../../lib/transcript-review";
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
+const ocrResult = z.object({
+  courses: z.array(z.object({
+    term: z.string(),
+    courseCode: z.string(),
+    courseName: z.string(),
+    credits: z.number().finite().nullable(),
+    gradeRaw: z.string(),
+    confidence: z.number().finite(),
+  })),
+});
 
 function arrayBufferToBase64(buffer: ArrayBuffer) {
   const bytes = new Uint8Array(buffer);
@@ -49,7 +61,7 @@ export async function POST(request: Request) {
         role: "user",
         content: [
           fileContent,
-          { type: "input_text", text: "辨識這份國立政治大學成績單。只抽取各學期的課程列，不要輸出或保留姓名、學號、生日、系所等個人識別資訊。將學期正規化為民國學年度-學期，例如 110-1。成績可能是數字、W、P、抵免或空白；空白列不要輸出。請以指定 JSON schema 回傳。" },
+          { type: "input_text", text: "辨識這份國立政治大學成績單。只抽取課程、學期、學分與成績，不要輸出姓名、學號、生日或學生系所。依各頁、各欄實際印出的學年度與學期標題判讀。若同一列有上學期、下學期兩欄，分別輸出該欄的課程紀錄，學分與成績不可移到另一欄。若左右欄為不同學期的課程清單，各自沿用自己的學期標題。學期用民國學年度-學期（例如 113-1 為上學期、113-2 為下學期、113-3 為暑修）。只辨識到學年度時只填該年度，兩者都無法辨識時留空。courseCode 只填文件印出的課號，沒有就留空。gradeRaw 保留原本的數字、等第、W、P 或抵免。能看見課名但成績模糊時保留該課，成績留空讓使用者補填。略過空白列及平均、排名、學分總計等統計列。依指定 JSON schema 回傳。" },
         ],
       }],
       text: {
@@ -68,12 +80,13 @@ export async function POST(request: Request) {
                   additionalProperties: false,
                   properties: {
                     term: { type: "string" },
+                    courseCode: { type: "string" },
                     courseName: { type: "string" },
                     credits: { type: ["number", "null"] },
                     gradeRaw: { type: "string" },
                     confidence: { type: "number" },
                   },
-                  required: ["term", "courseName", "credits", "gradeRaw", "confidence"],
+                  required: ["term", "courseCode", "courseName", "credits", "gradeRaw", "confidence"],
                 },
               },
             },
@@ -85,21 +98,30 @@ export async function POST(request: Request) {
   });
 
   if (!openAiResponse.ok) {
-    const detail = await openAiResponse.json().catch(() => null) as { error?: { message?: string } } | null;
-    return NextResponse.json({ error: detail?.error?.message ?? "OCR 服務暫時無法使用" }, { status: 502 });
+    return NextResponse.json({ error: "OCR 服務暫時無法使用" }, { status: 502 });
   }
 
   const payload = await openAiResponse.json();
   const outputText = extractOutputText(payload);
   if (!outputText) return NextResponse.json({ error: "OCR 沒有回傳可讀取的課程資料" }, { status: 502 });
-  const parsed = JSON.parse(outputText) as { courses: Array<{ term: string; courseName: string; credits: number | null; gradeRaw: string; confidence: number }> };
-  const rows = parsed.courses.map((course, index) => {
-    const candidates = matchNccuCourse(course.courseName, course.credits, course.term);
-    const best = candidates[0];
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(outputText);
+  } catch {
+    return NextResponse.json({ error: "OCR 回傳的課程格式無法讀取" }, { status: 502 });
+  }
+  const result = ocrResult.safeParse(parsed);
+  if (!result.success) return NextResponse.json({ error: "OCR 回傳的課程格式無法讀取" }, { status: 502 });
+  const rows = result.data.courses.filter((course) => course.courseName.trim()).map((course, index) => {
+    const term = normalizeTranscriptTerm(course.term);
+    const candidates = matchNccuCourse(course.courseName, course.credits, term);
+    const [best, next] = candidates;
+    const suggestedCode = best && best.confidence >= .94 && (!next || best.confidence - next.confidence > .04)
+      ? best.code : "";
     return {
       id: `ocr-${index}-${crypto.randomUUID()}`,
-      term: course.term,
-      courseCode: best?.code ?? "",
+      term,
+      courseCode: course.courseCode.trim() || suggestedCode,
       courseName: course.courseName,
       credits: course.credits,
       gradeRaw: course.gradeRaw,

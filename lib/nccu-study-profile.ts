@@ -7,13 +7,17 @@ type TranscriptCourse = {
 };
 
 type CatalogCourse = { id: string; school: string; code: string; title: string; unit: string };
-type Distribution = { name: string; count: number };
-type Classification = { college: string; department?: string };
-type TeachingUnit = [department: string, aliases: string, prefixes?: string];
+type Distribution<T extends string = string> = { name: T; count: number };
+type Classification = { college: string; department?: DepartmentName };
+type TeachingUnit = readonly [department: string, aliases: string, prefixes?: string];
+type DepartmentMascot = Distribution<DepartmentName> & { label: string; symbol: string };
+type CourseAssignment = { key: string; courseName: string; courseCode: string; college?: string; department?: DepartmentName };
 
 export type NccuStudyProfile = {
   colleges: Distribution[];
   departments: Distribution[];
+  departmentMascot: DepartmentMascot | null;
+  courseAssignments: CourseAssignment[];
   titles: string[];
   unclassifiedCount: number;
   countedCount: number;
@@ -22,7 +26,7 @@ export type NccuStudyProfile = {
 // Teaching unit names and affiliations: https://2024nccu.nccu.edu.tw/p/426-1000-55.php?Lang=zh-tw
 // https://www.nccu.edu.tw/var/file/0/1000/img/7/748643962.pdf and https://aca.nccu.edu.tw/download/must/114/phd/463d.pdf
 // Prefixes are used only for dedicated subject codes in the local NCCU catalog.
-const units: [college: string, units: TeachingUnit[]][] = [
+const units = [
   ["商學院", [
     ["國際經營與貿易學系", "國貿", "301 351"],
     ["金融學系", "金融", "302 352"],
@@ -123,7 +127,99 @@ const units: [college: string, units: TeachingUnit[]][] = [
   ["X實驗學院", [
     ["運動產業與文化學士學位學程", "運動學程", "NU1"],
   ]],
-];
+] as const satisfies readonly [college: string, units: readonly TeachingUnit[]][];
+
+type DepartmentName = (typeof units)[number][1][number][0];
+
+export const departmentMascots = {
+  國際經營與貿易學系: { label: "國貿貨輪", symbol: "🚢" },
+  金融學系: { label: "金融金幣", symbol: "🪙" },
+  會計學系: { label: "會計算盤", symbol: "🧮" },
+  統計學系: { label: "統計蜜蜂", symbol: "🐝" },
+  企業管理學系: { label: "企管狗", symbol: "🐕" },
+  資訊管理學系: { label: "資管浣熊", symbol: "🦝" },
+  財務管理學系: { label: "財管松鼠", symbol: "🐿️" },
+  風險管理與保險學系: { label: "風管烏龜", symbol: "🐢" },
+  企業管理研究所: { label: "企研棋子", symbol: "♟️" },
+  科技管理與智慧財產研究所: { label: "科管智財燈泡", symbol: "💡" },
+  政治學系: { label: "政治老鷹", symbol: "🦅" },
+  社會學系: { label: "社會螞蟻", symbol: "🐜" },
+  財政學系: { label: "財政錢袋", symbol: "💰" },
+  公共行政學系: { label: "公行海狸", symbol: "🦫" },
+  地政學系: { label: "地政地圖", symbol: "🗺️" },
+  經濟學系: { label: "經濟趨勢圖", symbol: "📈" },
+  民族學系: { label: "民族織線", symbol: "🧶" },
+  國家發展研究所: { label: "國發幼苗", symbol: "🌱" },
+  勞工研究所: { label: "勞工工具", symbol: "🛠️" },
+  社會工作研究所: { label: "社工水獺", symbol: "🦦" },
+  亞太研究英語博士學位學程: { label: "亞太博士鯨魚", symbol: "🐋" },
+  亞太研究英語碩士學位學程: { label: "亞太碩士海豚", symbol: "🐬" },
+  應用經濟與社會發展英語碩士學位學程: { label: "應社橋樑", symbol: "🌉" },
+  英國語文學系: { label: "英文字母", symbol: "🔤" },
+  阿拉伯語文學系: { label: "阿文駱駝", symbol: "🐪" },
+  斯拉夫語文學系: { label: "斯語棕熊", symbol: "🐻" },
+  日本語文學系: { label: "日文富士山", symbol: "🗻" },
+  韓國語文學系: { label: "韓文老虎", symbol: "🐯" },
+  土耳其語文學系: { label: "土文貓", symbol: "🐈" },
+  歐洲語文學系: { label: "歐文狐狸", symbol: "🦊" },
+  東南亞語文學系: { label: "東南亞棕櫚樹", symbol: "🌴" },
+  語言學研究所: { label: "語言鸚鵡", symbol: "🦜" },
+  中東與中亞研究碩士學位學程: { label: "中東亞沙漠", symbol: "🏜️" },
+  中國文學系: { label: "中文墨筆", symbol: "🖋️" },
+  歷史學系: { label: "歷史沙漏", symbol: "⏳" },
+  哲學系: { label: "哲學貓頭鷹", symbol: "🦉" },
+  圖書資訊與檔案學研究所: { label: "圖檔檔案櫃", symbol: "🗄️" },
+  宗教研究所: { label: "宗教燭燈", symbol: "🕯️" },
+  台灣史研究所: { label: "台史陶甕", symbol: "🏺" },
+  台灣文學研究所: { label: "台文羽毛", symbol: "🪶" },
+  華語文教學博士學位學程: { label: "華教博士卷軸", symbol: "📜" },
+  華語文教學碩士學位學程: { label: "華教碩士對話框", symbol: "💬" },
+  新聞學系: { label: "新聞報紙", symbol: "🗞️" },
+  廣告學系: { label: "廣告擴音器", symbol: "📣" },
+  廣播電視學系: { label: "廣電攝影機", symbol: "📹" },
+  國際傳播英語碩士學位學程: { label: "國傳地球網格", symbol: "🌐" },
+  數位內容碩士學位學程: { label: "數位內容調色盤", symbol: "🎨" },
+  傳播學院博士班: { label: "傳播博士天線", symbol: "📡" },
+  傳播學院傳播碩士學位學程: { label: "傳播碩士麥克風", symbol: "🎙️" },
+  亞際文化研究國際碩士學位學程: { label: "亞際摺扇", symbol: "🪭" },
+  法律學系: { label: "法律天平", symbol: "⚖️" },
+  法律科際整合研究所: { label: "法科拼圖", symbol: "🧩" },
+  法學院碩士在職專班: { label: "法碩法典", symbol: "📖" },
+  應用數學系: { label: "應數章魚", symbol: "🐙" },
+  心理學系: { label: "心理刺蝟", symbol: "🦔" },
+  神經科學研究所: { label: "神科大腦", symbol: "🧠" },
+  應用物理研究所: { label: "物理蘋果", symbol: "🍎" },
+  電子物理學士學位學程: { label: "電物閃電", symbol: "⚡" },
+  資訊科學系: { label: "資科企鵝", symbol: "🐧" },
+  社群網路與人智計算國際研究生博士學位學程: { label: "群智蜘蛛", symbol: "🕷️" },
+  數位內容與科技學士學位學程: { label: "數位遊戲手把", symbol: "🎮" },
+  人工智慧應用學士學位學程: { label: "人智機器人", symbol: "🤖" },
+  資訊安全碩士學位學程: { label: "資安盾牌", symbol: "🛡️" },
+  外交學系: { label: "外交和平鴿", symbol: "🕊️" },
+  東亞研究所: { label: "東亞燈籠", symbol: "🏮" },
+  俄羅斯研究所: { label: "俄研雪花", symbol: "❄️" },
+  日本研究碩士學位學程: { label: "日研櫻花", symbol: "🌸" },
+  日本研究博士學位學程: { label: "日研博士鳥居", symbol: "⛩️" },
+  國際研究英語碩士學位學程: { label: "國研指南針", symbol: "🧭" },
+  教育學系: { label: "教育象", symbol: "🐘" },
+  幼兒教育研究所: { label: "幼教兔子", symbol: "🐇" },
+  教育行政與政策研究所: { label: "教政紀錄板", symbol: "📋" },
+  輔導與諮商碩士學位學程: { label: "輔諮擁抱", symbol: "🫂" },
+  創新國際學院學士班: { label: "創國火箭", symbol: "🚀" },
+  全球傳播與創新科技碩士學位學程: { label: "全創衛星", symbol: "🛰️" },
+  運動產業與文化學士學位學程: { label: "運動跑鞋", symbol: "👟" },
+} satisfies Record<DepartmentName, { label: string; symbol: string }>;
+
+export const mascotGroups = units.map(([college, departments]) => ({
+  college,
+  mascots: departments.map(([department]) => ({ department, ...departmentMascots[department] })),
+}));
+
+export function mascotIconPath(symbol: string, directory: "mascot-icons" | "mascot-results" = "mascot-icons") {
+  const code = [...symbol.replace(/[\uFE0E\uFE0F]/gu, "")]
+    .map((character) => character.codePointAt(0)!.toString(16)).join("-");
+  return `/${directory}/${code}.png`;
+}
 
 const collegeAliases: Record<string, string> = {
   文院: "文學院",
@@ -214,14 +310,14 @@ function gradeCountsAsTaken(grade: string) {
   return Boolean(value) && !/^(?:W(?:退選|停修|撤選|WITHDRAWN)?|WITHDRAWN|WITHDRAWAL|退選|撤選|停修|棄修|已退選|I|IP|INCOMPLETE|INPROGRESS|PENDING|修課中|修習中|修讀中|選修中|在修|未修畢|未完成|成績未定|尚未登錄|未登錄|未評分|未送出|未公布|待補|待定|待登錄|NA)$/u.test(value);
 }
 
-function orderedCounts(counts: Map<string, number>): Distribution[] {
+function orderedCounts<T extends string>(counts: Map<T, number>): Distribution<T>[] {
   return [...counts].map(([name, count]) => ({ name, count }))
     .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "zh-Hant"));
 }
 
-function uniqueLeader(counts: Distribution[]) {
+function uniqueLeader<T extends string>(counts: Distribution<T>[]) {
   const [first, second] = counts;
-  return first && first.count > (second?.count ?? 0) ? first.name : undefined;
+  return first && first.count > (second?.count ?? 0) ? first : undefined;
 }
 
 export function buildNccuStudyProfile<T extends CatalogCourse>(rows: readonly TranscriptCourse[], catalog: readonly T[]): NccuStudyProfile {
@@ -231,7 +327,8 @@ export function buildNccuStudyProfile<T extends CatalogCourse>(rows: readonly Tr
   const byFamily = indexCourses(nccu, (course) => courseFamily(normalizeCode(course.code)));
   const byTitle = indexCourses(nccu, (course) => normalizeName(course.title));
   const collegeCounts = new Map<string, number>();
-  const departmentCounts = new Map<string, number>();
+  const departmentCounts = new Map<DepartmentName, number>();
+  const courseAssignments: CourseAssignment[] = [];
   const seen = new Set<string>();
   let unclassifiedCount = 0;
 
@@ -256,6 +353,12 @@ export function buildNccuStudyProfile<T extends CatalogCourse>(rows: readonly Tr
     seen.add(key);
 
     const classification = course && classifyCourse(course);
+    courseAssignments.push({
+      key,
+      courseName: course?.title ?? row.courseName,
+      courseCode: course?.code ?? row.courseCode,
+      ...classification,
+    });
     if (!classification) {
       unclassifiedCount++;
       continue;
@@ -267,13 +370,15 @@ export function buildNccuStudyProfile<T extends CatalogCourse>(rows: readonly Tr
 
   const rankedColleges = orderedCounts(collegeCounts);
   const rankedDepartments = orderedCounts(departmentCounts);
-  const leadingCollege = uniqueLeader(rankedColleges);
+  const leadingCollege = uniqueLeader(rankedColleges)?.name;
   const leadingDepartment = uniqueLeader(rankedDepartments);
+  const departmentMascot = leadingDepartment ? { ...leadingDepartment, ...departmentMascots[leadingDepartment.name] } : null;
   const titles: string[] = [];
   if (leadingCollege === "商學院") titles.push("商院狗");
   if (leadingCollege === "外國語文學院") titles.push("語文貓");
-  if (leadingDepartment === "企業管理學系") titles.push("企管狗");
-  if (leadingDepartment === "應用物理研究所" || leadingDepartment === "電子物理學士學位學程") titles.push("物理蘋果");
+  if (departmentMascot && ["企業管理學系", "應用物理研究所", "電子物理學士學位學程"].includes(departmentMascot.name)) {
+    titles.push(departmentMascot.label);
+  }
 
-  return { colleges: rankedColleges, departments: rankedDepartments, titles, unclassifiedCount, countedCount: seen.size };
+  return { colleges: rankedColleges, departments: rankedDepartments, departmentMascot, courseAssignments, titles, unclassifiedCount, countedCount: seen.size };
 }

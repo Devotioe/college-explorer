@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import courseSeed from "../data/course-seed.json" with { type: "json" };
-import { buildNccuStudyProfile } from "../lib/nccu-study-profile.ts";
+import { buildNccuStudyProfile, departmentMascots, mascotIconPath } from "../lib/nccu-study-profile.ts";
 
 const catalog = [
   { id: "nccu-accounting", school: "NCCU", code: "000314011", title: "初級會計學（一）", unit: "會計系" },
@@ -96,6 +97,46 @@ test("awards only the supplied title for a uniquely leading college or teaching 
   const physics = buildNccuStudyProfile([transcript("043065001", "量子世界")], catalog);
   assert.deepEqual(physics.titles, ["物理蘋果"]);
   assert.deepEqual(physics.departments, [{ name: "應用物理研究所", count: 1 }]);
+});
+
+test("switches the mascot when the unique leading department changes and omits it for ties", () => {
+  const codes = ["306005001", "306009001", "302018001", "302032011", "302034001"];
+  const courses = codes.map((code) => {
+    const { course } = courseSeed.records.find(({ course }) => course.school === "NCCU" && course.code === code);
+    return { id: course.id, school: course.school, code, title: course.titleZh, unit: course.department };
+  });
+  const [firstMis, secondMis, firstFinance, secondFinance, thirdFinance] = courses.map(({ code, title }) => transcript(code, title));
+  const leadingMis = [firstMis, secondMis, firstFinance];
+  assert.deepEqual(buildNccuStudyProfile(leadingMis, courses).departmentMascot, {
+    name: "資訊管理學系", count: 2, label: "資管浣熊", symbol: "🦝",
+  });
+
+  const tied = [...leadingMis, secondFinance, { ...firstMis, term: "115-1" }];
+  assert.equal(buildNccuStudyProfile(tied, courses).departmentMascot, null);
+  assert.deepEqual(buildNccuStudyProfile([...tied, thirdFinance], courses).departmentMascot, {
+    name: "金融學系", count: 3, label: "金融金幣", symbol: "🪙",
+  });
+});
+
+test("each department has a unique mascot name and a bundled PNG icon", () => {
+  const labels = new Set();
+  const symbols = new Set();
+  for (const [department, { label, symbol }] of Object.entries(departmentMascots)) {
+    const path = mascotIconPath(symbol);
+    assert.ok(label && symbol, department);
+    assert.ok(!labels.has(label), `${department} repeats the label ${label}`);
+    assert.ok(!symbols.has(path), `${department} repeats the icon ${path}`);
+    const artwork = readFileSync(new URL(`../public${path}`, import.meta.url));
+    assert.equal(artwork.subarray(0, 8).toString("hex"), "89504e470d0a1a0a", department);
+    assert.equal(artwork.readUInt32BE(16), 72, department);
+    assert.equal(artwork.readUInt32BE(20), 72, department);
+    const resultArt = readFileSync(new URL(`../public${mascotIconPath(symbol, "mascot-results")}`, import.meta.url));
+    assert.equal(resultArt.subarray(0, 8).toString("hex"), "89504e470d0a1a0a", department);
+    assert.equal(resultArt.readUInt32BE(16), 512, department);
+    assert.equal(resultArt.readUInt32BE(20), 512, department);
+    labels.add(label);
+    symbols.add(path);
+  }
 });
 
 test("uses an exact normalized title if the code supplies no catalog evidence", () => {

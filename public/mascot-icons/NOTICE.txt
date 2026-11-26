@@ -1,0 +1,9 @@
+Mascot artwork from Twemoji v17.0.3.
+Copyright Twitter, Inc. and Twemoji contributors.
+
+Source: https://github.com/jdecked/twemoji/tree/v17.0.3/assets/72x72
+License: Creative Commons Attribution 4.0 International
+https://creativecommons.org/licenses/by/4.0/
+
+The PNG artwork is distributed unchanged. The department assignments and labels
+are part of Course Compass.

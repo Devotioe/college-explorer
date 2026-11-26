@@ -1,11 +1,23 @@
 import { env } from "cloudflare:workers";
 import { desc, eq } from "drizzle-orm";
 import { NextResponse } from "next/server";
+import { z } from "zod";
 import { getDb } from "../../../db";
 import { transcriptUploads } from "../../../db/schema";
 import { getCurrentPasswordUser } from "../../../lib/password-auth";
 
-type ConfirmedRow = { term?: string; courseCode?: string; courseName?: string; credits?: number | null; gradeRaw?: string; confidence?: number };
+const confirmedTranscript = z.object({
+  fileName: z.string().optional(),
+  fileType: z.string().optional(),
+  rows: z.array(z.object({
+    term: z.string().optional(),
+    courseCode: z.string().optional(),
+    courseName: z.string().optional(),
+    credits: z.number().finite().nullable().optional(),
+    gradeRaw: z.string().optional(),
+    confidence: z.number().finite().optional(),
+  })).max(300),
+});
 
 export async function GET() {
   const user = await getCurrentPasswordUser();
@@ -27,8 +39,10 @@ export async function POST(request: Request) {
   const user = await getCurrentPasswordUser();
   if (!user) return NextResponse.json({ error: "請先登入" }, { status: 401 });
   if (!env.DB) return NextResponse.json({ error: "D1 尚未連線" }, { status: 503 });
-  const body = await request.json() as { fileName?: string; fileType?: string; rows?: ConfirmedRow[] };
-  const rows = (body.rows ?? []).filter((row) => row.courseName?.trim() && row.gradeRaw?.trim()).slice(0, 300);
+  const parsed = confirmedTranscript.safeParse(await request.json().catch(() => null));
+  if (!parsed.success) return NextResponse.json({ error: "成績單格式有誤，每份最多可保存 300 筆學期成績。" }, { status: 400 });
+  const body = parsed.data;
+  const rows = body.rows.filter((row) => row.courseName?.trim() && row.gradeRaw?.trim());
   if (!rows.length) return NextResponse.json({ error: "沒有可儲存的課程" }, { status: 400 });
   const transcriptId = crypto.randomUUID();
   const now = Date.now();

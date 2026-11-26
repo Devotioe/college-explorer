@@ -11,7 +11,6 @@ import {
   Heart,
   History,
   AlertTriangle,
-  FileText,
   ExternalLink,
   Languages,
   LoaderCircle,
@@ -19,7 +18,6 @@ import {
   LogOut,
   Map as MapIcon,
   Network,
-  ScanLine,
   Search,
   Save,
   ShieldCheck,
@@ -35,20 +33,19 @@ import {
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
+import { TranscriptDialog } from "../components/transcript-dialog";
 import { buildCourseMapBranches, buildSemesterPlan, getCourseRequirementNotes, type CourseMapBranch } from "../lib/course-map";
 import type { CourseRecommendation } from "../lib/course-recommendations";
 import { curricula, curriculumId, resolveCurriculum } from "../lib/curricula";
 import { normalizeNccuCourseCode } from "../lib/nccu-course-code.mjs";
 import type { NccuOffering } from "../lib/nccu-offerings";
-import { buildNccuStudyProfile } from "../lib/nccu-study-profile";
+import { buildNccuStudyProfile, mascotGroups, mascotIconPath } from "../lib/nccu-study-profile";
 import type { ReviewDetails, TeacherReviewGroup } from "../lib/student-reviews";
 import { initialTheme, readStoredTheme, type Theme } from "../lib/theme";
+import type { TranscriptHistory, TranscriptRow } from "../lib/transcript-review";
 
 type School = "NTHU" | "NCCU";
 type Account = { id: string; email: string; displayName: string };
-type TranscriptCandidate = { code: string; title: string; credits: number | null; department: string; confidence: number };
-type TranscriptRow = { id: string; term: string; courseCode: string; courseName: string; credits: number | null; gradeRaw: string; confidence: number; candidates?: TranscriptCandidate[] };
-type TranscriptHistory = { id: string; fileName: string; fileType: string; createdAt: string; confirmedAt: string | null; rows: TranscriptRow[] };
 type Course = {
   id: string;
   school: School;
@@ -349,16 +346,17 @@ export default function Home() {
   const [transcriptOpen, setTranscriptOpen] = useState(false);
   const [mapName, setMapName] = useState("我的學習路徑");
   const [courseDetailsOpen, setCourseDetailsOpen] = useState<Course | null>(null);
-  const [saveNotice, setSaveNotice] = useState<number | null>(null);
   const [transcriptCourses, setTranscriptCourses] = useState<TranscriptRow[]>([]);
-  const [transcriptRefresh, setTranscriptRefresh] = useState(0);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 
   useEffect(() => {
-    queueMicrotask(() => setTheme(readStoredTheme(localStorage)));
+    queueMicrotask(() => {
+      setTheme(readStoredTheme(localStorage));
+      if (new URLSearchParams(window.location.search).get("view") === "map") setView("map");
+    });
   }, []);
 
   useEffect(() => {
@@ -398,7 +396,7 @@ export default function Home() {
       setTranscriptCourses(transcripts.flatMap((record) => record.rows));
     }).catch(() => { if (active) setTranscriptCourses([]); });
     return () => { active = false; };
-  }, [account, transcriptRefresh]);
+  }, [account]);
 
   useEffect(() => {
     let cancelled = false;
@@ -508,9 +506,10 @@ export default function Home() {
     [view, selected, catalogCourses, transcriptCourses],
   );
   const studyProfile = useMemo(
-    () => view === "map" && catalogCourses.length ? buildNccuStudyProfile(transcriptCourses, catalogCourses) : null,
-    [view, catalogCourses, transcriptCourses],
+    () => catalogCourses.length ? buildNccuStudyProfile(transcriptCourses, catalogCourses) : null,
+    [catalogCourses, transcriptCourses],
   );
+  const departmentMascot = studyProfile?.departmentMascot;
   const openCourse = (course: Course) => {
     setSelected(course);
     setCourseDetailsOpen(course);
@@ -546,7 +545,15 @@ export default function Home() {
           </button>
           {account ? <>
             <button className="account-upload-button" onClick={() => setTranscriptOpen(true)}><UploadCloud size={16} /><span className="hidden lg:inline">上傳成績單</span></button>
-            <div className="account-chip"><span className="account-avatar"><UserRound size={14} /></span><span className="hidden max-w-28 truncate xl:block">{account.displayName}</span><button aria-label="登出" title="登出" onClick={logout}><LogOut size={14} /></button></div>
+            <div className="account-chip">
+              <span className="account-avatar">
+                {departmentMascot
+                  ? <img src={mascotIconPath(departmentMascot.symbol)} alt={departmentMascot.label} title={departmentMascot.label} width={20} height={20} />
+                  : <UserRound size={14} />}
+              </span>
+              <span className="hidden max-w-28 truncate xl:block">{account.displayName}</span>
+              <button aria-label="登出" title="登出" onClick={logout}><LogOut size={14} /></button>
+            </div>
           </> : <button className="account-login-button" onClick={() => setAuthPurpose("transcript")}><LogIn size={16} /><span>登入 / 註冊</span></button>}
         </div>
       </header>
@@ -618,12 +625,11 @@ export default function Home() {
         setAuthPurpose(null);
         if (authPurpose === "transcript") setTranscriptOpen(true);
       }} />}
-      {transcriptOpen && account && <TranscriptDialog account={account} close={() => setTranscriptOpen(false)} onSaved={(count) => { setTranscriptOpen(false); setSaveNotice(count); setTranscriptRefresh((value) => value + 1); }} />}
+      {transcriptOpen && account && <TranscriptDialog displayName={account.displayName} close={() => setTranscriptOpen(false)} />}
       {courseDetailsOpen && <CourseDetailsModal key={courseDetailsOpen.id} course={courseDetailsOpen}
         favorite={<FavoriteButton course={courseDetailsOpen} saved={saved.includes(courseDetailsOpen.id)} disabled={!storedFavorites} toggle={toggleFavorite} />}
         showMap={() => { setSelected(courseDetailsOpen); setCourseDetailsOpen(null); setView("map"); }}
         requestedCode={view === "discover" ? normalizeNccuCourseCode(query) : ""} close={() => setCourseDetailsOpen(null)} />}
-      {saveNotice !== null && <SaveSuccessDialog count={saveNotice} close={() => setSaveNotice(null)} />}
     </main>
   );
 }
@@ -663,79 +669,6 @@ function AuthDialog({ close, onAuthenticated, purpose }: {
       <button className="primary-action" disabled={submitting}>{submitting && <LoaderCircle className="animate-spin" size={16} />}{mode === "login" ? "登入並繼續" : "註冊並繼續"}</button>
     </form>
     <p className="privacy-note"><ShieldCheck size={13} />密碼以 PBKDF2 雜湊保存，不會保存明文。</p>
-  </div></div>;
-}
-
-const sampleTranscriptRows: TranscriptRow[] = [
-  { id: "sample-1", term: "110-1", courseCode: "000219011", courseName: "經濟學", credits: 3, gradeRaw: "84.00", confidence: .98 },
-  { id: "sample-2", term: "110-1", courseCode: "000314011", courseName: "初級會計學（一）", credits: 3, gradeRaw: "88.00", confidence: .97 },
-  { id: "sample-3", term: "112-1", courseCode: "000359011", courseName: "統計學（一）", credits: 3, gradeRaw: "W", confidence: .86 },
-  { id: "sample-4", term: "113-1", courseCode: "046001001", courseName: "程式設計概論", credits: 3, gradeRaw: "93.00", confidence: .94 },
-];
-
-function TranscriptDialog({ account, close, onSaved }: { account: Account; close: () => void; onSaved: (count: number) => void }) {
-  const [file, setFile] = useState<File | null>(null);
-  const [rows, setRows] = useState<TranscriptRow[]>([]);
-  const [status, setStatus] = useState("");
-  const [processing, setProcessing] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const [history, setHistory] = useState<TranscriptHistory[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(true);
-  useEffect(() => {
-    let active = true;
-    void fetch("/api/transcripts").then(async (response) => {
-      const data = await response.json() as { transcripts?: TranscriptHistory[] };
-      if (!response.ok) throw new Error();
-      return data.transcripts ?? [];
-    }).then((items) => { if (active) setHistory(items); }).catch(() => { if (active) setHistory([]); }).finally(() => { if (active) setHistoryLoading(false); });
-    return () => { active = false; };
-  }, []);
-  const updateRow = (id: string, patch: Partial<TranscriptRow>) => setRows((items) => items.map((item) => item.id === id ? { ...item, ...patch } : item));
-  const runOcr = async () => {
-    if (!file) { setStatus("請先選擇 PDF 或圖片"); return; }
-    setProcessing(true); setStatus("正在辨識版面、課程名稱與成績…"); setSaved(false);
-    try {
-      const form = new FormData(); form.append("file", file);
-      const response = await fetch("/api/ocr/transcript", { method: "POST", body: form });
-      const data = await response.json() as { rows?: TranscriptRow[]; error?: string };
-      if (!response.ok || !data.rows) throw new Error(data.error ?? "辨識失敗");
-      setRows(data.rows); setStatus(`已辨識 ${data.rows.length} 門課，請逐列確認。`);
-    } catch (error) { setStatus(error instanceof Error ? error.message : "辨識失敗"); }
-    finally { setProcessing(false); }
-  };
-  const loadSample = () => { setRows(sampleTranscriptRows); setStatus("已載入範例辨識結果，可直接測試編輯與確認流程。"); setSaved(false); };
-  const saveRows = async () => {
-    setProcessing(true); setStatus("正在保存確認結果…");
-    try {
-      const response = await fetch("/api/transcripts", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ fileName: file?.name ?? "範例成績單", fileType: file?.type ?? "sample", rows }) });
-      const data = await response.json() as { transcript?: { rows: number }; error?: string };
-      if (!response.ok) throw new Error(data.error ?? "儲存失敗");
-      const savedCount = data.transcript?.rows ?? rows.length;
-      setSaved(true); setStatus(`已確認並保存 ${savedCount} 門課。`); onSaved(savedCount);
-    } catch (error) { setStatus(error instanceof Error ? error.message : "儲存失敗"); }
-    finally { setProcessing(false); }
-  };
-  return <div className="modal-backdrop transcript-backdrop" onMouseDown={close}><div className="transcript-dialog" onMouseDown={(event) => event.stopPropagation()}>
-    <header className="transcript-header"><div><p className="eyebrow">NCCU TRANSCRIPT OCR</p><h2><ScanLine size={22} />成績單辨識與確認</h2><p>{account.displayName}，請確認每一列再保存到個人學習紀錄。</p></div><button className="modal-close static" aria-label="關閉" onClick={close}><X size={17} /></button></header>
-    <section className="transcript-history"><div className="transcript-history-heading"><div><p className="eyebrow">SAVED RECORDS</p><h3><History size={17} />過去 OCR 紀錄</h3></div><span>{history.length} 份</span></div>
-      {historyLoading ? <p className="history-empty">正在讀取紀錄…</p> : history.length ? <div className="history-card-list">{history.map((item) => <button key={item.id} className="history-card" onClick={() => { setFile(null); setRows(item.rows.map((row) => ({ ...row, id: `${item.id}-${row.id}` }))); setStatus(`已載入「${item.fileName}」的 ${item.rows.length} 門課，可直接查看或修改。`); setSaved(false); }}><span className="history-card-icon"><FileText size={17} /></span><span className="min-w-0 flex-1"><strong>{item.fileName}</strong><small>{new Date(item.confirmedAt ?? item.createdAt).toLocaleString("zh-TW")}・{item.rows.length} 門課</small></span><ArrowRight size={15} /></button>)}</div> : <p className="history-empty">尚無紀錄。第一次確認保存後，以後可以直接從這裡打開，不必重傳成績單。</p>}
-    </section>
-    <section className="upload-panel">
-      <div className="upload-icon"><UploadCloud size={24} /></div><div className="min-w-0 flex-1"><h3>{file ? file.name : "選擇政大成績單"}</h3><p>支援 PDF、JPG、PNG、WebP，最大 10 MB。原始檔不會保存。</p></div>
-      <label className="secondary-action">選擇檔案<input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" hidden onChange={(event) => setFile(event.target.files?.[0] ?? null)} /></label>
-      <button className="primary-action compact" onClick={runOcr} disabled={!file || processing}>{processing ? <LoaderCircle className="animate-spin" size={16} /> : <ScanLine size={16} />}開始 OCR</button>
-    </section>
-    <div className="transcript-toolbar"><p className={saved ? "success-message" : ""}>{status || "尚未開始辨識"}</p><button onClick={loadSample}>沒有 API key？載入範例結果</button></div>
-    {rows.length ? <div className="transcript-table-wrap"><table className="transcript-table"><thead><tr><th>學期</th><th>課程代號</th><th>課程名稱</th><th>學分</th><th>成績</th><th>比對</th><th /></tr></thead><tbody>{rows.map((row) => <tr key={row.id}>
-      <td><input value={row.term} onChange={(event) => updateRow(row.id, { term: event.target.value })} /></td>
-      <td>{row.candidates?.length ? <select value={row.courseCode} onChange={(event) => { const candidate = row.candidates?.find((item) => item.code === event.target.value); updateRow(row.id, { courseCode: event.target.value, courseName: candidate?.title ?? row.courseName, confidence: candidate?.confidence ?? row.confidence }); }}>{row.candidates.map((candidate) => <option key={candidate.code} value={candidate.code}>{candidate.code}</option>)}</select> : <input value={row.courseCode} onChange={(event) => updateRow(row.id, { courseCode: event.target.value })} />}</td>
-      <td><input className="course-name-input" value={row.courseName} onChange={(event) => updateRow(row.id, { courseName: event.target.value })} /></td>
-      <td><input type="number" min="0" max="20" step="0.5" value={row.credits ?? ""} onChange={(event) => updateRow(row.id, { credits: event.target.value === "" ? null : Number(event.target.value) })} /></td>
-      <td><input value={row.gradeRaw} onChange={(event) => updateRow(row.id, { gradeRaw: event.target.value })} /></td>
-      <td><span className={`confidence-badge ${row.confidence >= .9 ? "high" : row.confidence >= .7 ? "medium" : "low"}`}>{Math.round(row.confidence * 100)}%</span></td>
-      <td><button aria-label="移除這列" className="mini-action danger" onClick={() => setRows((items) => items.filter((item) => item.id !== row.id))}><Trash2 size={14} /></button></td>
-    </tr>)}</tbody></table></div> : <div className="ocr-empty"><FileText size={30} /><h3>辨識結果會顯示在這裡</h3><p>課程代號是依課名、學期與學分從 2,446 門政大課程中推測，請務必人工確認。</p></div>}
-    <footer className="transcript-footer"><p><ShieldCheck size={14} />只保存你確認的課程列；姓名、學號與原始檔不會保存。</p><button className="primary-action compact" onClick={saveRows} disabled={!rows.length || processing || saved}>{saved ? <><Check size={16} />已保存</> : <><Save size={16} />確認並保存</>}</button></footer>
   </div></div>;
 }
 
@@ -888,10 +821,6 @@ function CourseDetailsModal({ course, requestedCode, favorite, showMap, close }:
       </>}
     </div>
   </div></div>;
-}
-
-function SaveSuccessDialog({ count, close }: { count: number; close: () => void }) {
-  return <div className="modal-backdrop save-success-backdrop" onMouseDown={close}><div className="save-success-dialog" role="dialog" aria-modal="true" aria-labelledby="save-success-title" onMouseDown={(event) => event.stopPropagation()}><span className="save-success-icon"><Check size={28} /></span><p className="eyebrow">TRANSCRIPT SAVED</p><h2 id="save-success-title">成績單已保存</h2><p>已將你確認的 {count} 門課加入個人學習紀錄，確認頁面已收起。</p><button className="primary-action" onClick={close}>完成</button></div></div>;
 }
 
 function FilterGroup({ label, children }: { label: string; children: React.ReactNode }) { return <div className="mb-5"><p className="mb-2 text-xs font-bold text-[#64706c]">{label}</p><div className="flex flex-wrap gap-2">{children}</div></div>; }
@@ -1059,6 +988,10 @@ function SemesterPlanPanel({ selected, catalog, completed, openDetails }: {
 }
 
 function StudyProfilePanel({ profile, openTranscript }: { profile: ReturnType<typeof buildNccuStudyProfile> | null; openTranscript: () => void }) {
+  const mascot = profile?.departmentMascot;
+  const titles = profile?.titles.filter((title) => title !== mascot?.label) ?? [];
+  const departments = profile?.departments ?? [];
+
   function counts(entries: { name: string; count: number }[]) {
     return entries.length ? <dl>
       {entries.map(({ name, count }) => <div key={name}><dt>{name}</dt><dd>{count} 門</dd></div>)}
@@ -1073,14 +1006,37 @@ function StudyProfilePanel({ profile, openTranscript }: { profile: ReturnType<ty
       <button className="map-choose-target" onClick={openTranscript}><UploadCloud size={16} />上傳成績單</button>
     </header>
     {!!profile?.countedCount && <>
-      {profile.titles.length > 0 && <div className="study-profile-titles" aria-label="修課稱號">
-        {profile.titles.map((title) => <span key={title}><GraduationCap size={16} />{title}</span>)}
+      {mascot ? <section className="study-profile-mascot" aria-labelledby="study-mascot-title">
+        <span className="study-profile-mascot-icon"><img src={mascotIconPath(mascot.symbol)} alt="" width={36} height={36} /></span>
+        <div>
+          <h3 id="study-mascot-title">修課吉祥物</h3>
+          <strong>{mascot.label}</strong>
+          <p>{mascot.name}修課最多，共 {mascot.count} 門。</p>
+        </div>
+      </section> : departments.length > 1 && <p className="study-profile-mascot-tie">
+        {departments.filter(({ count }) => count === departments[0].count).map(({ name }) => name).join("、")}並列最多。吉祥物會在單一系所領先時顯示。
+      </p>}
+      {titles.length > 0 && <div className="study-profile-titles" aria-label="修課稱號">
+        {titles.map((title) => <span key={title}><GraduationCap size={16} />{title}</span>)}
       </div>}
       <div className="study-profile-counts">
         <section><h3>依學院</h3>{counts(profile.colleges)}</section>
         <section><h3>依系所</h3>{counts(profile.departments)}</section>
       </div>
     </>}
+    <details className="study-profile-mascot-gallery">
+      <summary>查看所有系所吉祥物</summary>
+      {mascotGroups.map(({ college, mascots }) => <section key={college} className="mascot-gallery-group">
+        <h3>{college}</h3>
+        <ul className="mascot-gallery-grid">
+          {mascots.map(({ department, label, symbol }) => <li key={department}>
+            <img src={mascotIconPath(symbol)} alt="" width={32} height={32} loading="lazy" />
+            <div><strong>{label}</strong><span>{department}</span></div>
+          </li>)}
+        </ul>
+      </section>)}
+      <a className="mascot-gallery-credit" href="/mascot-icons/NOTICE.txt">圖示來源與授權</a>
+    </details>
   </section>;
 }
 
