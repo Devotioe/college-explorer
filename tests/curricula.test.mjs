@@ -29,5 +29,8 @@ test("keeps new department records scoped to verified cohorts and course familie
   assert.equal(dataStructures.course.code, "306013001");
   assert.equal(dataStructures.semester, 3);
   assert.equal(resolveCurriculum(math, catalog).find(({ title }) => title === "線性代數二").course.code, "MATH 1420");
-  assert.deepEqual(curricula.filter(({ department }) => department === "風險管理與保險學系").map(({ year }) => year), [115, 114, 113]);
+  const risk = curricula.filter(({ department }) => department === "風險管理與保險學系");
+  assert.deepEqual(risk.map(({ year }) => year), [115, 114, 113, 112, 111, 110]);
+  assert.equal(risk.find(({ year }) => year === 110).required.find(({ title }) => title === "微積分").code, "308002");
+  assert.equal(risk.find(({ year }) => year === 110).required.find(({ title }) => title === "風險管理").semester, 2);
 });

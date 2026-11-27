@@ -274,8 +274,9 @@ html[data-theme="dark"] .compare-target input { border-color: #454553; backgroun
 .transcript-table td { border-top: 1px solid var(--border); padding: .5rem; }
 .transcript-table input, .transcript-table select { min-width: 92px; padding: .55rem .62rem; font-size: .7rem; }
 .transcript-review-actions { display: flex; flex-wrap: wrap; justify-content: space-between; gap: .5rem; padding: .9rem 1.5rem; }
-.transcript-earliest-year { display: flex; align-items: center; flex-wrap: wrap; gap: .45rem; margin-top: .5rem; color: var(--foreground); font-size: .8rem; }
-.transcript-earliest-year input { width: 6rem; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); padding: .3rem .45rem; }
+.transcript-context-field { display: flex; align-items: center; flex-wrap: wrap; gap: .45rem; margin-top: .5rem; color: var(--foreground); font-size: .8rem; }
+.transcript-context-field input, .transcript-context-field select { max-width: 100%; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); padding: .3rem .45rem; }
+.transcript-context-field input { width: 6rem; }
 .transcript-year-notice { padding: 0 1.5rem .75rem; color: var(--foreground); font-size: .85rem; }
 .transcript-review-table { min-width: 0; table-layout: fixed; }
 .transcript-review-table th { font-size: .875rem; }

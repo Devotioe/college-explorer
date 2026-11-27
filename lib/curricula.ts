@@ -187,7 +187,20 @@ export const curricula: readonly Curriculum[] = [
     school: "NCCU", department: "風險管理與保險學系", year, source: "https://rmi.nccu.edu.tw/zh_tw/Curriculum/Curriculum1/course1",
     required: nccuRisk, notes: ["全學年科目標示起修學期。必修的開課院系、群修及抵免條件請對照系方規定。"],
   })),
+  ...[112, 111, 110].map((year): Curriculum => ({
+    school: "NCCU", department: "風險管理與保險學系", year, source: "https://rmi.nccu.edu.tw/zh_tw/Curriculum/Curriculum1/course1",
+    required: nccuRisk.map((item) => {
+      if (item.title === "風險管理") return { ...item, semester: 2 };
+      if (year < 112 && item.title === "企業倫理與社會責任") return { title: "社會責任與倫理" };
+      return item;
+    }), notes: ["全學年科目標示起修學期。必修的開課院系、群修及抵免條件請對照系方規定。"],
+  })),
 ];
+
+export function nccuRequirementTableUrl(year?: string | null) {
+  const academicYear = year && /^\d{2,3}$/u.test(year) ? year : "115";
+  return `https://moltke.nccu.edu.tw/tsreqsub_SSO/reqsubmain.jsp?selyy=${academicYear}&colnum=1`;
+}
 
 export function curriculumId({ school, department, year }: Curriculum) {
   return `${school}-${department}-${year}`;

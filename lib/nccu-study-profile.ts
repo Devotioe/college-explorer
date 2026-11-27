@@ -4,6 +4,7 @@ type TranscriptCourse = {
   gradeRaw: string;
   credits: number | null;
   term: string;
+  assignmentReason?: "home-department" | "curriculum";
 };
 
 type CatalogCourse = { id: string; school: string; code: string; title: string; unit: string };
@@ -11,7 +12,7 @@ type Distribution<T extends string = string> = { name: T; count: number };
 type Classification = { college: string; department?: DepartmentName };
 type TeachingUnit = readonly [department: string, aliases: string, prefixes?: string];
 type DepartmentMascot = Distribution<DepartmentName> & { label: string; symbol: string };
-type CourseAssignment = { key: string; courseName: string; courseCode: string; college?: string; department?: DepartmentName };
+type CourseAssignment = { key: string; courseName: string; courseCode: string; college?: string; department?: DepartmentName; reason?: TranscriptCourse["assignmentReason"] };
 
 export type NccuStudyProfile = {
   colleges: Distribution[];
@@ -35,7 +36,7 @@ const units = [
     ["企業管理學系", "企管 企博產 企博學", "305 355"],
     ["資訊管理學系", "資管 資博學 資博產 資專", "306 356 971"],
     ["財務管理學系", "財管", "307 357"],
-    ["風險管理與保險學系", "風管", "308 358"],
+    ["風險管理與保險學系", "風管 風險管理與保險系", "308 358"],
     ["企業管理研究所", "企研 MBA", "363"],
     ["科技管理與智慧財產研究所", "科管智財 科智 科博學 科博產", "364"],
   ]],
@@ -257,13 +258,20 @@ function startsWithUnit(label: string, unit: string) {
   return label === name || (label.startsWith(name) && /^[一二三四五六七八九十甲乙丙丁碩博士班選系所\d]/u.test(label.slice(name.length)));
 }
 
+export const nccuDepartments: readonly DepartmentName[] = units.flatMap(([, teachingUnits]) => teachingUnits.map(([name]) => name));
+
+export function normalizeNccuDepartment(value: string): DepartmentName | undefined {
+  const label = normalizeName(value).replace(/(?:學士班|大學部)$/u, "");
+  return aliases.find(({ name }) => normalizeName(name) === label || normalizeName(`${name}系`) === label)?.department;
+}
+
 function matchesCollegeLabel(label: string, unit: string) {
   if (startsWithUnit(label, unit)) return true;
   const name = normalizeName(unit);
   return name.endsWith("院") && (label === `${name}學士` || label === `${name}學士班`);
 }
 
-function classifyCourse(course: CatalogCourse): Classification | undefined {
+export function classifyNccuCourse(course: Pick<CatalogCourse, "unit" | "code">): Classification | undefined {
   const labels = course.unit.normalize("NFKC").split(/[,、;\/|]/u).map(normalizeName).filter(Boolean);
   const classifications = labels.map((label) => {
     const department = aliases.find(({ name }) => startsWithUnit(label, name));
@@ -347,12 +355,13 @@ export function buildNccuStudyProfile<T extends CatalogCourse>(rows: readonly Tr
     if (seen.has(key)) continue;
     seen.add(key);
 
-    const classification = course && classifyCourse(course);
+    const classification = course && classifyNccuCourse(course);
     courseAssignments.push({
       key,
       courseName: course?.title ?? row.courseName,
       courseCode: course?.code ?? row.courseCode,
       ...classification,
+      ...(course && row.assignmentReason ? { reason: row.assignmentReason } : {}),
     });
     if (!classification) {
       unclassifiedCount++;

@@ -5,10 +5,14 @@ import { z } from "zod";
 import { getDb } from "../../../db";
 import { transcriptUploads } from "../../../db/schema";
 import { getCurrentPasswordUser } from "../../../lib/password-auth";
+import { normalizeNccuDepartment } from "../../../lib/nccu-study-profile";
+import { normalizeTranscriptAcademicYear } from "../../../lib/transcript-review";
 
 const confirmedTranscript = z.object({
   fileName: z.string().optional(),
   fileType: z.string().optional(),
+  homeDepartment: z.string().max(70).optional(),
+  admissionYear: z.string().max(4).optional(),
   rows: z.array(z.object({
     term: z.string().optional(),
     courseCode: z.string().optional(),
@@ -42,12 +46,17 @@ export async function POST(request: Request) {
   const parsed = confirmedTranscript.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "成績單格式有誤，每份最多可保存 300 筆學期成績。" }, { status: 400 });
   const body = parsed.data;
+  const homeDepartment = body.homeDepartment ? normalizeNccuDepartment(body.homeDepartment) : undefined;
+  const admissionYear = body.admissionYear ? normalizeTranscriptAcademicYear(body.admissionYear) : "";
+  if ((body.homeDepartment && !homeDepartment) || (body.admissionYear && !admissionYear)) {
+    return NextResponse.json({ error: "請確認本科系及入學學年度。" }, { status: 400 });
+  }
   const rows = body.rows.filter((row) => row.courseName?.trim() && row.gradeRaw?.trim());
   if (!rows.length) return NextResponse.json({ error: "沒有可儲存的課程" }, { status: 400 });
   const transcriptId = crypto.randomUUID();
   const now = Date.now();
-  const statements = [env.DB.prepare("INSERT INTO transcript_uploads (id, user_id, file_name, file_type, status, created_at, confirmed_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .bind(transcriptId, user.id, (body.fileName ?? "成績單").slice(0, 160), (body.fileType ?? "unknown").slice(0, 80), "confirmed", now, now)];
+  const statements = [env.DB.prepare("INSERT INTO transcript_uploads (id, user_id, file_name, file_type, home_department, admission_year, status, created_at, confirmed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .bind(transcriptId, user.id, (body.fileName ?? "成績單").slice(0, 160), (body.fileType ?? "unknown").slice(0, 80), homeDepartment ?? null, admissionYear || null, "confirmed", now, now)];
   for (const row of rows) {
     const numeric = Number(row.gradeRaw);
     statements.push(env.DB.prepare("INSERT INTO transcript_course_rows (id, transcript_id, term, course_code, course_name, credits, grade_raw, grade_numeric, match_confidence, confirmed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)")

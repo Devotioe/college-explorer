@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import courseSeed from "../data/course-seed.json" with { type: "json" };
-import { buildNccuStudyProfile, departmentMascots, mascotIconPath } from "../lib/nccu-study-profile.ts";
+import { buildNccuStudyProfile, classifyNccuCourse, departmentMascots, mascotIconPath, normalizeNccuDepartment } from "../lib/nccu-study-profile.ts";
 
 const catalog = [
   { id: "nccu-accounting", school: "NCCU", code: "000314011", title: "初級會計學（一）", unit: "會計系" },
@@ -23,6 +23,14 @@ const catalog = [
 
 const transcript = (courseCode, courseName, gradeRaw = "A-", term = "114-1") => ({
   courseCode, courseName, gradeRaw, term, credits: 3,
+});
+
+test("recognizes a printed major and actual teaching units without turning a college into a department", () => {
+  assert.equal(normalizeNccuDepartment("風險管理與保險系"), "風險管理與保險學系");
+  assert.equal(normalizeNccuDepartment("風管系"), "風險管理與保險學系");
+  assert.equal(normalizeNccuDepartment("商學院"), undefined);
+  assert.equal(classifyNccuCourse({ code: "308002001", unit: "風管一" }).department, "風險管理與保險學系");
+  assert.equal(classifyNccuCourse({ code: "000711001", unit: "應數系" }).department, "應用數學系");
 });
 
 test("classifies a mixed-prefix NCCU code by its actual unit", () => {

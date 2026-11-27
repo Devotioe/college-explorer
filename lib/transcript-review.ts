@@ -25,6 +25,8 @@ export type TranscriptHistory = {
   id: string;
   fileName: string;
   fileType: string;
+  homeDepartment?: string | null;
+  admissionYear?: string | null;
   createdAt: string;
   confirmedAt: string | null;
   rows: TranscriptRow[];

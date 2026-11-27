@@ -43,7 +43,7 @@ const layoutResult = z.object({
 });
 
 const layoutInstructions = [
-  "四張圖為同一頁的四個方向。依照可順讀的「國立政治大學」、「學生成績單」、「科目名稱」、「學分」、「成績」或學年學期表頭，選擇方向，填入該圖標記的旋轉角度。無法確認時填 orientationConfirmed=false、rotation=0、columns=[]。",
+  "四張圖為同一頁的四個方向。即使檔案已裁去頁首，仍以可順讀的學年度、第一學期、第二學期、科目、學分和成績等表頭判斷方向，填入該圖標記的旋轉角度。無法確認時填 orientationConfirmed=false、rotation=0、columns=[]。",
   "只在選定的圖上定位橫向並排的課程表區塊，依左至右排列。每區包含整組課名欄、相鄰學分與成績欄、區內所有學年度和學期表頭。上下排列且共用同一組欄位的課表一起保留。不可把一組課表中的課名、學分、成績分成不同區塊。邊界應涵蓋完整字行，避免頁首個資。座標以該張圖左上為 (0,0)、右下為 (1000,1000)，不含其他圖。找不到清楚的課表界線時回傳空的 columns。",
   "逐區估計可見的學期成績筆數 expectedRows。要算模糊但看得出對應學分或成績的課程列，同一課名若兩學期都印有資料則算兩筆。忽略表頭、空白和統計列。一個課名分行印出仍只算該學期一筆。無法可靠估計時填 null。只回傳方向與版面，勿抄錄任何個資或課程內容。",
 ].join("\n");
@@ -127,10 +127,8 @@ function mapGridRows(result: z.infer<typeof gridReading>, slots: TranscriptGridS
         const safeCredits = readPrintedCredits(credits);
         const gradeRaw = readPrintedGrade(grade);
         const candidates = courseName ? matchNccuCourse(courseName, safeCredits, period.term) : [];
-        const [best, next] = candidates;
-        const courseCode = best && best.confidence >= .94 && (!next || best.confidence - next.confidence > .04) ? best.code : "";
         return { id: `${sourceLine}-${semester}`, ...period, sourceLine,
-          courseName, courseCode, credits: safeCredits, gradeRaw, confidence: entry ? .85 : 0, candidates,
+          courseName, courseCode: "", credits: safeCredits, gradeRaw, confidence: entry ? .85 : 0, candidates,
           requiresOcrReview: !courseName || !gradeRaw ? true as const : undefined };
       });
   });
@@ -255,13 +253,11 @@ export async function POST(request: Request) {
       courseName.trim() || courseCode.trim() || gradeRaw.trim() || credits !== null).map((course) => {
       const courseName = course.courseName.trim();
       const candidates = courseName ? matchNccuCourse(courseName, course.credits, period.term) : [];
-      const [best, next] = candidates;
-      const suggestedCode = best && best.confidence >= .94 && (!next || best.confidence - next.confidence > .04)
-        ? best.code : "";
+      const [best] = candidates;
       return {
         id: `ocr-${crypto.randomUUID()}`,
         ...period,
-        courseCode: course.courseCode.trim() || suggestedCode,
+        courseCode: course.courseCode.trim(),
         courseName,
         credits: course.credits,
         gradeRaw: course.gradeRaw,

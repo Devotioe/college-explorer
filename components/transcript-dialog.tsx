@@ -2,6 +2,8 @@
 
 import { ArrowLeft, FileText, History, LoaderCircle, ScanLine, ShieldCheck, Trash2, UploadCloud, X } from "lucide-react";
 import { useEffect, useState } from "react";
+import { nccuRequirementTableUrl } from "../lib/curricula";
+import { classifyNccuCourse, nccuDepartments } from "../lib/nccu-study-profile";
 import {
   assignTranscriptSemester, confirmedTranscriptRows, editSemesterGrade, groupTranscriptForReview, semesterLabels,
   type Semester, type TranscriptHistory, type TranscriptReviewRow, type TranscriptRow,
@@ -15,13 +17,17 @@ const sampleRows: TranscriptRow[] = [
   { id: "sample-5", term: "114-2", courseCode: "302032011", courseName: "金融法規", credits: 3, gradeRaw: "W", confidence: .95 },
 ];
 
-type Draft = { fileName: string; fileType: string; courses: TranscriptReviewRow[]; warnings: string[]; originalUrl?: string };
+type Draft = { fileName: string; fileType: string; courses: TranscriptReviewRow[]; warnings: string[]; originalUrl?: string;
+  homeDepartment: string; admissionYear: string };
 
-function SemesterField({ row, semester, position, update }: {
-  row: TranscriptReviewRow; semester: Semester; position: number; update: (row: TranscriptReviewRow) => void;
+function SemesterField({ row, semester, position, homeDepartment, update }: {
+  row: TranscriptReviewRow; semester: Semester; position: number; homeDepartment: string; update: (row: TranscriptReviewRow) => void;
 }) {
   const grade = row.semesters[semester];
   const label = semesterLabels[semester];
+  const own = ({ code, department, confidence }: { code: string; department: string; confidence: number }) => homeDepartment
+    && confidence >= .9 && classifyNccuCourse({ code, unit: department })?.department === homeDepartment;
+  const suggestions = [...(grade?.candidates ?? [])].sort((a, b) => Number(Boolean(own(b))) - Number(Boolean(own(a))));
   return <>
     <span className="transcript-mobile-label" aria-hidden="true">{label}成績</span>
     <input aria-label={`第 ${position} 列${label}成績`} placeholder={grade?.requiresOcrReview ? "待核對" : "—"} maxLength={20} value={grade?.gradeRaw ?? ""}
@@ -47,7 +53,9 @@ function SemesterField({ row, semester, position, update }: {
             }));
           }}>
           <option value="">選擇比對課程</option>
-          {grade.candidates.map(({ code, title, department }) => <option key={code} value={code}>{title}・{department}・{code}</option>)}
+          {suggestions.map((candidate) => <option key={candidate.code} value={candidate.code}>
+            {candidate.title}・{candidate.department}・{candidate.code}{own(candidate) ? "（本科系）" : ""}
+          </option>)}
         </select>
       </label>}
     </details>
@@ -56,7 +64,7 @@ function SemesterField({ row, semester, position, update }: {
 
 export function TranscriptDialog({ displayName, close }: { displayName: string; close: () => void }) {
   const [file, setFile] = useState<File | null>(null);
-  const [earliestYear, setEarliestYear] = useState("");
+  const [uploadDepartment, setUploadDepartment] = useState("");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [status, setStatus] = useState("");
   const [processing, setProcessing] = useState(false);
@@ -86,8 +94,10 @@ export function TranscriptDialog({ displayName, close }: { displayName: string; 
     return () => controller.abort();
   }, []);
 
-  function startReview(rows: TranscriptRow[], fileName: string, fileType: string, source?: File, warnings: string[] = []) {
-    setDraft({ fileName, fileType, courses: groupTranscriptForReview(rows), warnings, originalUrl: source && URL.createObjectURL(source) });
+  function startReview(rows: TranscriptRow[], fileName: string, fileType: string, source?: File, warnings: string[] = [],
+    homeDepartment = "", admissionYear = "") {
+    setDraft({ fileName, fileType, courses: groupTranscriptForReview(rows), warnings, homeDepartment, admissionYear,
+      originalUrl: source && URL.createObjectURL(source) });
     setStatus(rows.length ? "" : "這份檔案沒有辨識出科目，可以手動新增。");
   }
 
@@ -102,8 +112,8 @@ export function TranscriptDialog({ displayName, close }: { displayName: string; 
     setStatus("正在辨識科目和學期成績…");
     try {
       const { scanTranscript } = await import("../lib/transcript-scan-client");
-      const { rows, warnings } = await scanTranscript(file, earliestYear.trim(), setStatus);
-      startReview(rows, file.name, file.type, file, warnings);
+      const { rows, warnings } = await scanTranscript(file, setStatus);
+      startReview(rows, file.name, file.type, file, warnings, uploadDepartment);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "成績單辨識失敗");
     } finally {
@@ -124,7 +134,8 @@ export function TranscriptDialog({ displayName, close }: { displayName: string; 
     try {
       const response = await fetch("/api/transcripts", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ fileName: draft.fileName, fileType: draft.fileType, rows: validated.rows }),
+        body: JSON.stringify({ fileName: draft.fileName, fileType: draft.fileType, rows: validated.rows,
+          homeDepartment: draft.homeDepartment, admissionYear: draft.admissionYear.trim() }),
       });
       const data = await response.json() as { transcript?: { id: string }; error?: string };
       if (!response.ok || !data.transcript?.id) throw new Error(data.error ?? "保存失敗");
@@ -160,6 +171,22 @@ export function TranscriptDialog({ displayName, close }: { displayName: string; 
               ...courses, { id: crypto.randomUUID(), year: courses.at(-1)?.year ?? "", courseName: "", semesters: {} },
             ])}>新增科目</button>
           </div>
+          <div className="transcript-review-actions">
+            <label className="transcript-context-field">本科系
+              <select value={draft.homeDepartment} onChange={(event) => {
+                const homeDepartment = event.target.value;
+                setDraft({ ...draft, homeDepartment });
+              }}>
+                <option value="">請確認或選擇系所</option>
+                {nccuDepartments.map((department) => <option key={department}>{department}</option>)}
+              </select>
+            </label>
+            <label className="transcript-context-field">入學學年度（選填）
+              <input inputMode="numeric" maxLength={4} placeholder="例如 110" value={draft.admissionYear}
+                onChange={(event) => setDraft({ ...draft, admissionYear: event.target.value })} />
+            </label>
+            <a className="secondary-action" href={nccuRequirementTableUrl(draft.admissionYear)} target="_blank" rel="noreferrer">政大必修科目表</a>
+          </div>
           {originalUrl && pendingYears > 0 && <p className="transcript-year-notice" role="status">有 {pendingYears} 列的學年度待核對，請依原檔補填。</p>}
           {originalUrl && pendingNames > 0 && <p className="transcript-year-notice" role="status">有 {pendingNames} 列的課名待核對，該列讀到的成績與學分已保留。</p>}
           {draft.warnings.map((warning) => <p key={warning} className="transcript-year-notice">{warning}</p>)}
@@ -183,8 +210,8 @@ export function TranscriptDialog({ displayName, close }: { displayName: string; 
                     <input aria-label={`第 ${position} 列科目`} maxLength={160} placeholder={originalUrl ? "課名待核對" : "科目名稱"} value={row.courseName}
                       onChange={(event) => update({ ...row, courseName: event.target.value })} />
                   </td>
-                  <td><SemesterField row={row} semester="1" position={position} update={update} /></td>
-                  <td><SemesterField row={row} semester="2" position={position} update={update} /></td>
+                  <td><SemesterField row={row} semester="1" position={position} homeDepartment={draft.homeDepartment} update={update} /></td>
+                  <td><SemesterField row={row} semester="2" position={position} homeDepartment={draft.homeDepartment} update={update} /></td>
                   <td className="transcript-review-other">
                     {row.unassigned ? <label className="transcript-term-warning">
                       未判定學期・{row.unassigned.gradeRaw || "成績空白"}
@@ -195,7 +222,7 @@ export function TranscriptDialog({ displayName, close }: { displayName: string; 
                         <option value="">請指定學期</option>
                         {(["1", "2", "3"] as const).map((term) => <option key={term} value={term}>{semesterLabels[term]}</option>)}
                       </select>
-                    </label> : row.semesters["3"] && <SemesterField row={row} semester="3" position={position} update={update} />}
+                    </label> : row.semesters["3"] && <SemesterField row={row} semester="3" position={position} homeDepartment={draft.homeDepartment} update={update} />}
                   </td>
                   <td className="transcript-review-remove">
                     <button type="button" aria-label={`移除第 ${position} 列`} className="mini-action danger"
@@ -221,14 +248,20 @@ export function TranscriptDialog({ displayName, close }: { displayName: string; 
           <div className="min-w-0 flex-1">
             <h3>{file?.name ?? "選擇成績單檔案"}</h3>
             <p>支援 PDF、JPG、PNG、WebP，最大 10 MB。</p>
-            <label className="transcript-earliest-year">最早學年度（選填）
-              <input inputMode="numeric" maxLength={4} placeholder="例如 110" value={earliestYear} disabled={processing}
-                onChange={(event) => { setEarliestYear(event.target.value); setStatus(""); }} />
+            <p>可以裁掉個資欄，請保留學年度、學期表頭和課程欄。</p>
+            <label className="transcript-context-field">政大系所
+              <select value={uploadDepartment} disabled={processing} onChange={(event) => {
+                setUploadDepartment(event.target.value);
+                setStatus("");
+              }}>
+                <option value="">請選擇本科系</option>
+                {nccuDepartments.map((department) => <option key={department}>{department}</option>)}
+              </select>
             </label>
           </div>
           <label className="secondary-action">選擇檔案<input type="file" accept="application/pdf,image/jpeg,image/png,image/webp" hidden disabled={processing}
             onChange={(event) => {
-              if (file) setEarliestYear("");
+              if (file) setUploadDepartment("");
               setFile(event.target.files?.[0] ?? null);
               setStatus("");
             }} /></label>
@@ -248,7 +281,8 @@ export function TranscriptDialog({ displayName, close }: { displayName: string; 
               <strong>{entry.fileName}</strong><small>{entry.rows.length} 筆學期成績</small>
               <span className="transcript-history-actions">
                 <a href={`/transcripts/${encodeURIComponent(entry.id)}`}>查看結果</a>
-                <button disabled={processing} onClick={() => startReview(entry.rows, entry.fileName, entry.fileType)}>載入核對</button>
+                <button disabled={processing} onClick={() => startReview(entry.rows, entry.fileName, entry.fileType, undefined, [],
+                  entry.homeDepartment ?? "", entry.admissionYear ?? "")}>載入核對</button>
               </span>
             </span>
           </div>)}</div>}

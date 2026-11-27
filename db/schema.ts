@@ -94,6 +94,8 @@ export const transcriptUploads = sqliteTable(
     userId: text("user_id").notNull().references(() => passwordUsers.id, { onDelete: "cascade" }),
     fileName: text("file_name").notNull(),
     fileType: text("file_type").notNull(),
+    homeDepartment: text("home_department"),
+    admissionYear: text("admission_year"),
     status: text("status").notNull(),
     createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull(),
     confirmedAt: integer("confirmed_at", { mode: "timestamp_ms" }),

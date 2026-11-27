@@ -1,10 +1,53 @@
-import courseIndex from "../data/nccu-course-index.json";
+import courseIndex from "../data/nccu-course-index.json" with { type: "json" };
+import { curricula } from "./curricula";
+import { classifyNccuCourse, normalizeNccuDepartment } from "./nccu-study-profile";
 
 type IndexCourse = (typeof courseIndex)[number];
 export type TranscriptCandidate = Pick<IndexCourse, "code" | "title" | "credits" | "department"> & { confidence: number };
 
 function normalize(value: string) {
-  return value.normalize("NFKC").toLowerCase().replace(/[\s\p{P}\p{S}]/gu, "");
+  return value.normalize("NFKC").toLowerCase().replaceAll("臺", "台").replace(/[\s\p{P}\p{S}]/gu, "");
+}
+
+const coursesByTitle = new Map<string, IndexCourse[]>();
+for (const course of courseIndex) {
+  const key = normalize(course.title);
+  const group = coursesByTitle.get(key);
+  if (group) group.push(course);
+  else coursesByTitle.set(key, [course]);
+}
+
+function courseFamily(code: string) {
+  return /^[A-Z\d]{9}$/u.test(code) ? code.slice(0, 6) : code;
+}
+
+export function nccuTranscriptCurriculum(department: string, admissionYear: string) {
+  return curricula.find((item) => item.school === "NCCU" && item.department === department && item.year === Number(admissionYear));
+}
+
+export function resolveNccuTranscriptCourse(row: { courseName: string; courseCode: string; credits: number | null; term: string },
+  department: string, admissionYear: string) {
+  if (row.courseCode.trim() || !department) return undefined;
+  const home = normalizeNccuDepartment(department);
+  if (!home) return undefined;
+  const title = normalize(row.courseName);
+  const exact = coursesByTitle.get(title) ?? [];
+  const requirement = nccuTranscriptCurriculum(home, admissionYear)?.required.find((item) => normalize(item.title) === title);
+  const official = requirement?.code;
+  const byRequirement = (course: IndexCourse) => official && (course.code === official || courseFamily(course.code) === official);
+  let candidates = exact.filter(({ code, department: unit }) => classifyNccuCourse({ code, unit })?.department === home);
+  if (!candidates.length) return undefined;
+  const exactRequirement = candidates.filter(byRequirement);
+  const usedRequirement = exactRequirement.length > 0 && new Set(candidates.map(({ code }) => courseFamily(code))).size > 1;
+  if (exactRequirement.length) candidates = exactRequirement;
+  if (row.credits !== null) {
+    const matchingCredits = candidates.filter(({ credits }) => credits === row.credits);
+    if (matchingCredits.length) candidates = matchingCredits;
+  }
+  const offered = row.term ? candidates.filter(({ offeredTerms }) => offeredTerms.includes(row.term)) : [];
+  if (offered.length) candidates = offered;
+  if (new Set(candidates.map(({ code }) => courseFamily(code))).size !== 1) return undefined;
+  return { code: candidates[0].code, reason: usedRequirement ? "curriculum" as const : "home-department" as const };
 }
 
 function bigrams(value: string) {

@@ -1,8 +1,8 @@
 /// <reference types="vite/client" />
 
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
-import { gridHeight, gridRowHeight, gridWidth, readNccuTranscriptGrid, type TranscriptGridColumn } from "./nccu-transcript-grid";
-import { normalizeTranscriptAcademicYear, type TranscriptRow } from "./transcript-review";
+import { gridWidth, readNccuTranscriptGrid, type TranscriptGridColumn } from "./nccu-transcript-grid";
+import type { TranscriptRow } from "./transcript-review";
 import {
   preferTranscriptScanRetry, transcriptScanCrops, transcriptScanRotations,
   type ScanColumn, type ScanRotation, type TranscriptScanLayout,
@@ -118,39 +118,41 @@ async function findLayout(page: HTMLCanvasElement) {
   return (await requestScan(form)).layout ?? null;
 }
 
-async function recognize(file: Blob, earliestYear: string, mode: "column" | "retry" | "", name = "course-column.jpg") {
+async function recognize(file: Blob, mode: "column" | "retry") {
   const form = new FormData();
-  form.append("file", file, name);
-  if (mode) form.append("mode", mode);
-  if (earliestYear) form.append("earliestYear", earliestYear);
+  form.append("file", file, "course-column.jpg");
+  form.append("mode", mode);
   const { rows } = await requestScan(form);
   if (!Array.isArray(rows)) throw new Error("OCR 沒有回傳可讀取的課程資料");
   return rows;
 }
 
 function identifyNccuGrid(page: HTMLCanvasElement) {
-  const { canvas, context } = makeCanvas(gridWidth, gridHeight);
-  context.drawImage(page, 0, 0, gridWidth, gridHeight);
-  const { data } = context.getImageData(0, 0, gridWidth, gridHeight);
-  const gray = new Uint8Array(gridWidth * gridHeight);
+  const height = Math.round(page.height * gridWidth / page.width);
+  const { canvas, context } = makeCanvas(gridWidth, height);
+  context.drawImage(page, 0, 0, gridWidth, height);
+  const { data } = context.getImageData(0, 0, gridWidth, height);
+  const gray = new Uint8Array(gridWidth * height);
   for (let i = 0; i < gray.length; i++) gray[i] = Math.round(data[i * 4] * .299 + data[i * 4 + 1] * .587 + data[i * 4 + 2] * .114);
   canvas.width = canvas.height = 0;
-  return readNccuTranscriptGrid(gray);
+  return { columns: readNccuTranscriptGrid(gray), height };
 }
 
-function prepareNccuColumn(page: HTMLCanvasElement, column: TranscriptGridColumn) {
+function prepareNccuColumn(page: HTMLCanvasElement, column: TranscriptGridColumn, gridHeight: number) {
   const scale = 4;
   const gutter = 60;
-  const headerHeight = 50;
-  const rowHeight = gridRowHeight * scale + 8;
+  const headerHeight = column.headerHeight;
+  const stripHeight = Math.round(column.rowHeight * scale);
+  const rowHeight = stripHeight + 8;
   const width = (column.right - column.left) * scale;
   const { canvas, context } = makeCanvas(width + gutter, headerHeight * scale + column.lines.length * rowHeight);
   const scaleX = page.width / gridWidth;
   const scaleY = page.height / gridHeight;
   function drawStrip(top: number, height: number, y: number, header = false) {
+    const targetHeight = Math.round(height * scale);
     context.drawImage(page, column.left * scaleX, top * scaleY, (column.right - column.left) * scaleX,
-      height * scaleY, gutter, y, width, height * scale);
-    const pixels = context.getImageData(gutter, y, width, height * scale);
+      height * scaleY, gutter, y, width, targetHeight);
+    const pixels = context.getImageData(gutter, y, width, targetHeight);
     for (let i = 0; i < pixels.data.length; i += 4) {
       const red = pixels.data[i];
       const green = pixels.data[i + 1];
@@ -167,7 +169,7 @@ function prepareNccuColumn(page: HTMLCanvasElement, column: TranscriptGridColumn
   context.font = "bold 25px sans-serif";
   for (const [index, { line, center }] of column.lines.entries()) {
     const y = headerHeight * scale + index * rowHeight;
-    drawStrip(center - 7, gridRowHeight, y + 4);
+    drawStrip(center - column.rowHeight / 2, column.rowHeight, y + 4);
     context.fillStyle = "#10283f";
     context.fillText(String(line).padStart(2, "0"), 12, y + 41);
     context.fillStyle = "#d3dae2";
@@ -176,41 +178,36 @@ function prepareNccuColumn(page: HTMLCanvasElement, column: TranscriptGridColumn
   return canvas;
 }
 
-async function recognizeNccuColumn(page: HTMLCanvasElement, column: TranscriptGridColumn, earliestYear: string) {
-  const image = prepareNccuColumn(page, column);
+async function recognizeNccuColumn(page: HTMLCanvasElement, column: TranscriptGridColumn, gridHeight: number) {
+  const image = prepareNccuColumn(page, column, gridHeight);
   const form = new FormData();
   form.append("mode", "grid");
   form.append("file", await jpeg(image, .96), "nccu-year-column.jpg");
   image.width = image.height = 0;
   form.append("slots", JSON.stringify(column.lines.map(({ line, upper, lower }) => ({ line, upper, lower }))));
-  if (earliestYear) form.append("earliestYear", earliestYear);
   const { rows } = await requestScan(form);
   if (!Array.isArray(rows)) throw new Error("OCR 沒有回傳可讀取的課程資料");
   return rows;
 }
 
-export async function scanTranscript(file: File, earliestYear: string, progress: (message: string) => void) {
+export async function scanTranscript(file: File, progress: (message: string) => void) {
   if (!types.has(file.type)) throw new Error("只支援 PDF、JPG、PNG 或 WebP");
   if (file.size > 10 * 1024 * 1024) throw new Error("檔案不可超過 10 MB");
-  if (earliestYear && !normalizeTranscriptAcademicYear(earliestYear)) throw new Error("請輸入有效的最早學年度，例如 110。");
 
   const warnings: string[] = [];
   const rows: TranscriptRow[] = [];
-  const wholeFile = async () => ({
-    rows: await recognize(file, earliestYear, "", file.name),
-    warnings: ["瀏覽器無法分頁處理這份檔案，已用整份檔案辨識。請開啟原檔核對是否有漏列。"],
-  });
+  const unreadable = "瀏覽器無法開啟這份檔案，請把裁切後的課程表另存為 JPG 或 PNG 再試。";
 
   progress("正在開啟成績單…");
   const transcript = await openTranscript(file).catch(() => null);
-  if (!transcript) return wholeFile();
+  if (!transcript) throw new Error(unreadable);
 
   try {
     for (let pageNumber = 1; pageNumber <= transcript.pageCount; pageNumber++) {
       const pageLabel = `第 ${pageNumber} 頁`;
       progress(`正在判斷${pageLabel}的方向與欄位…`);
       const page = await transcript.render(pageNumber).catch(() => null);
-      if (!page && pageNumber === 1) return wholeFile();
+      if (!page && pageNumber === 1) throw new Error(unreadable);
       if (!page) {
         warnings.push(`${pageLabel}無法開啟，請依原檔補上該頁的科目。`);
         continue;
@@ -219,16 +216,16 @@ export async function scanTranscript(file: File, earliestYear: string, progress:
       const ratio = Math.max(page.width, page.height) / Math.min(page.width, page.height);
       const gridRotations = landscape ? [0, 180] as const : [90, 270] as const;
       let usedGrid = false;
-      if (ratio >= 1.34 && ratio <= 1.48) {
+      if (ratio >= 1.25 && ratio <= 3.8) {
         for (const rotation of gridRotations) {
           const upright = rotatePage(page, rotation, maxPageEdge);
-          const grid = identifyNccuGrid(upright);
-          if (grid) {
-            for (const [index, column] of grid.entries()) {
+          const { columns, height } = identifyNccuGrid(upright);
+          if (columns) {
+            for (const [index, column] of columns.entries()) {
               if (!column.lines.some(({ upper, lower }) => upper || lower)) continue;
               const label = `${pageLabel}第 ${index + 1} 欄`;
               progress(`正在逐列辨識${label}…`);
-              const columnRows = await recognizeNccuColumn(upright, column, earliestYear);
+              const columnRows = await recognizeNccuColumn(upright, column, height);
               const blanks = columnRows.filter((row) => row.requiresOcrReview && (!row.courseName || !row.gradeRaw)).length;
               if (blanks) warnings.push(`${label}有 ${blanks} 筆課名或成績待核對，請比對原檔。`);
               rows.push(...columnRows);
@@ -256,10 +253,10 @@ export async function scanTranscript(file: File, earliestYear: string, progress:
         const crop = cropPage(orientedPage, bounds);
         const image = await jpeg(crop, .94);
         if (crop !== orientedPage) crop.width = crop.height = 0;
-        let columnRows = await recognize(image, earliestYear, "column");
+        let columnRows = await recognize(image, "column");
         if (bounds.expectedRows !== null && columnRows.length < bounds.expectedRows) {
           progress(`正在回查${label}可能漏掉的科目…`);
-          const retry = await recognize(image, earliestYear, "retry").catch(() => []);
+          const retry = await recognize(image, "retry").catch(() => []);
           if (preferTranscriptScanRetry(columnRows, retry)) columnRows = retry;
           if (columnRows.length < bounds.expectedRows) {
             warnings.push(`${label}辨識到 ${columnRows.length} 筆成績，版面估計約有 ${bounds.expectedRows} 筆。請對照原檔補上漏列。`);
