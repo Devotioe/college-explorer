@@ -2,10 +2,31 @@ import type { TranscriptRow } from "./transcript-review";
 
 export const transcriptScanRotations = [0, 90, 180, 270] as const;
 export type ScanRotation = typeof transcriptScanRotations[number];
-export type ScanColumn = { left: number; top: number; right: number; bottom: number; expectedRows: number | null };
+export type ScanColumn = { left: number; top: number; right: number; bottom: number; expectedRows: number | null; annual?: boolean };
 export type TranscriptScanLayout = { rotation: ScanRotation; orientationConfirmed: boolean; columns: ScanColumn[] };
 
 const pageBounds: ScanColumn = { left: 0, top: 0, right: 1000, bottom: 1000, expectedRows: null };
+
+export function isTranscriptPageText(value: string): boolean {
+  const title = value.normalize("NFKC").toUpperCase().replace(/[\s\p{P}\p{S}]/gu, "");
+  const schoolName = "NATIONALCHENGCHIUNIVERSITY";
+  return (title.length >= 16 && schoolName.startsWith(title))
+    || (title.length >= 12 && "CHENGCHIUNIVERSITY".startsWith(title))
+    || title.startsWith(`${schoolName}NATIONALCHENGCHI`)
+    || /^(?:國立政治大學|(?:國立政治大學)?(?:學生學業成績總表|學生成績單|成績單)|ACADEMICTRANSCRIPT|TRANSCRIPTOFRECORDS|科目|課名|以下空白|學期平均成績|累計平均成績|修習學分|實得學分|學分累計|(?:平均|排名|學分)(?:總計|合計))$/u.test(title);
+}
+
+export function completeTranscriptRowCount(rows: readonly TranscriptRow[]): number {
+  return rows.filter(({ courseName, gradeRaw }) => courseName.trim() && gradeRaw.trim() && !isTranscriptPageText(courseName)).length;
+}
+
+export function isTranscriptGradeDash(value: string): boolean {
+  return /^[\s\p{Pd}−]+$/u.test(value) && /[\p{Pd}−]/u.test(value);
+}
+
+export function needsUncutTranscriptRetry(rows: readonly TranscriptRow[], expected: number, discardedPageText: number) {
+  return discardedPageText > 0 || completeTranscriptRowCount(rows) * 3 < expected * 2;
+}
 
 export function transcriptScanCrops(columns: readonly ScanColumn[]): ScanColumn[] {
   if (!columns.length) return [pageBounds];

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { preferTranscriptScanRetry, transcriptScanCrops } from "../lib/transcript-scan-layout.ts";
+import { completeTranscriptRowCount, isTranscriptGradeDash, isTranscriptPageText, needsUncutTranscriptRetry, preferTranscriptScanRetry, transcriptScanCrops } from "../lib/transcript-scan-layout.ts";
 
 const left = { left: 55, right: 255, top: 210, bottom: 681, expectedRows: 14 };
 const middle = { left: 250, right: 483, top: 220, bottom: 711, expectedRows: 12 };
@@ -31,4 +31,23 @@ test("a second pass fills gaps without replacing recognised semester grades", ()
   assert.equal(preferTranscriptScanRetry([original], [reread, missing]), true);
   assert.equal(preferTranscriptScanRetry([original], [{ ...reread, gradeRaw: "89" }, missing]), false);
   assert.equal(preferTranscriptScanRetry([original], [reread]), false);
+});
+
+test("recognizes the school watermark and rejects grid readings consisting of watermark text and blanks", () => {
+  const fragments = ["NATIONAL CHENGCHI UN", "NATIONAL CHENGCHI UNIVERS", "NATIONAL CHENGCHI UNIVERSITY", "國立政治大學"];
+  assert.ok(fragments.every(isTranscriptPageText));
+  assert.equal(isTranscriptPageText("National Chengchi University History"), false);
+  assert.equal(isTranscriptPageText("國立政治大學校史研究"), false);
+
+  const rows = fragments.map((courseName, id) => ({ id: String(id), courseName, gradeRaw: "", credits: null, courseCode: "", term: "", confidence: .85 }));
+  const readable = { ...rows[0], courseName: "再保險", gradeRaw: "92" };
+  assert.equal(completeTranscriptRowCount([...rows, readable]), 1);
+  assert.equal(needsUncutTranscriptRetry([readable], 1, rows.length), true);
+  assert.equal(needsUncutTranscriptRetry([...rows, readable], 4, 0), true);
+  assert.equal(needsUncutTranscriptRetry([readable], 1, 0), false);
+});
+
+test("distinguishes printed empty score dashes from real grade marks", () => {
+  assert.ok(["-", "－", "—", "－ －", "−"].every(isTranscriptGradeDash));
+  assert.ok(["A-", "IP", "88.00", "抵免", ""].every((grade) => !isTranscriptGradeDash(grade)));
 });

@@ -1,17 +1,20 @@
-import { and, asc, eq } from "drizzle-orm";
 import { ArrowLeft, BookOpen, Check, Compass } from "lucide-react";
 import { notFound } from "next/navigation";
-import courseIndex from "../../../data/nccu-course-index.json";
 import { getDb } from "../../../db";
-import { transcriptCourseRows, transcriptUploads } from "../../../db/schema";
+import { transcriptUploads } from "../../../db/schema";
 import { nccuRequirementTableUrl } from "../../../lib/curricula";
-import { nccuTranscriptCurriculum, resolveNccuTranscriptCourse } from "../../../lib/nccu-course-match";
-import { buildNccuStudyProfile, mascotIconPath } from "../../../lib/nccu-study-profile";
+import { nccuTranscriptCurriculum } from "../../../lib/nccu-course-match";
+import { mascotIconPath } from "../../../lib/nccu-study-profile";
 import { getCurrentPasswordUser } from "../../../lib/password-auth";
+import { analyzeTranscript, ownedTranscript, readTranscriptRows } from "../../../lib/transcript-library";
 
 export const dynamic = "force-dynamic";
 
-const catalog = courseIndex.map(({ code, title, department }) => ({ id: code, school: "NCCU", code, title, unit: department }));
+const assignmentLabels = {
+  "home-department": "本科系同名配對",
+  curriculum: "依入學年度必修表對照",
+  "most-sections": "依歷年開課班次推定",
+};
 
 export default async function TranscriptResultPage({ params }: { params: Promise<{ id: string }> }) {
   const user = await getCurrentPasswordUser();
@@ -24,26 +27,18 @@ export default async function TranscriptResultPage({ params }: { params: Promise
 
   const { id } = await params;
   const db = getDb();
-  const [upload] = await db.select({ id: transcriptUploads.id, homeDepartment: transcriptUploads.homeDepartment,
+  const [upload] = await db.select({ fileName: transcriptUploads.fileName, fileType: transcriptUploads.fileType, homeDepartment: transcriptUploads.homeDepartment,
     admissionYear: transcriptUploads.admissionYear }).from(transcriptUploads)
-    .where(and(eq(transcriptUploads.id, id), eq(transcriptUploads.userId, user.id), eq(transcriptUploads.status, "confirmed")))
+    .where(ownedTranscript(user.id, id))
     .limit(1);
-  if (!upload) notFound();
+  if (!upload || upload.fileType === "sample") notFound();
 
-  const rows = await db.select({
-    term: transcriptCourseRows.term, courseCode: transcriptCourseRows.courseCode,
-    courseName: transcriptCourseRows.courseName, gradeRaw: transcriptCourseRows.gradeRaw, credits: transcriptCourseRows.credits,
-  }).from(transcriptCourseRows).where(and(eq(transcriptCourseRows.transcriptId, upload.id), eq(transcriptCourseRows.confirmed, true)))
-    .orderBy(asc(transcriptCourseRows.term), asc(transcriptCourseRows.courseName));
+  const profile = analyzeTranscript(upload, await readTranscriptRows(id));
   const homeDepartment = upload.homeDepartment ?? "";
   const admissionYear = upload.admissionYear ?? "";
-  const profile = buildNccuStudyProfile(rows.map((row) => {
-    const match = resolveNccuTranscriptCourse(row, homeDepartment, admissionYear);
-    return match ? { ...row, courseCode: match.code, assignmentReason: match.reason } : row;
-  }), catalog);
   const requirementSource = nccuTranscriptCurriculum(homeDepartment, admissionYear)?.source ?? nccuRequirementTableUrl(admissionYear);
   const { departmentMascot: mascot, departments, courseAssignments } = profile;
-  const mappedCount = departments.reduce((total, department) => total + department.count, 0);
+  const mappedCount = courseAssignments.filter(({ department, college, officialUnit }) => department || college || officialUnit).length;
   const tied = departments.length > 1 && departments[0].count === departments[1].count;
 
   return <main className="app-shell min-h-screen px-4 py-6 sm:px-8 sm:py-10">
@@ -60,15 +55,17 @@ export default async function TranscriptResultPage({ params }: { params: Promise
         </div>
         <div className="transcript-result-heading">
           <p className="flex items-center gap-1.5 text-sm font-semibold"><Check size={17} />成績單已確認</p>
+          <div className="transcript-source-badge mt-2"><span>本頁分析</span><strong title={upload.fileName}>{upload.fileName}</strong></div>
           {homeDepartment && <p className="text-sm">本科系 {homeDepartment}{admissionYear && `・${admissionYear} 學年度入學`}</p>}
           <h1 id="transcript-result-title">{mascot?.label ?? (tied ? "跨系修課並列" : "你的修課分布")}</h1>
           <p>{mascot ? `${mascot.name}修課最多，共 ${mascot.count} 門。`
             : tied ? "多個系所的修課門數相同。下方是這份成績單的系所分布。"
+              : departments.length ? `${departments[0].name}修課最多，共 ${departments[0].count} 門。`
               : "這份成績單目前沒有足夠的課程資料判定吉祥物。"}</p>
           <dl className="transcript-result-metrics">
             <div><dt>修過的科目</dt><dd>{profile.countedCount} 門</dd></div>
-            <div><dt>已配對系所</dt><dd>{mappedCount} 門</dd></div>
-            <div><dt>系所待確認</dt><dd>{profile.countedCount - mappedCount} 門</dd></div>
+            <div><dt>已確認開課單位</dt><dd>{mappedCount} 門</dd></div>
+            <div><dt>開課單位待確認</dt><dd>{profile.countedCount - mappedCount} 門</dd></div>
           </dl>
         </div>
       </section>
@@ -85,11 +82,11 @@ export default async function TranscriptResultPage({ params }: { params: Promise
           {homeDepartment && <a className="mb-2 inline-block text-sm underline" href={requirementSource} target="_blank" rel="noreferrer">查閱校方必修科目表</a>}
           {courseAssignments.length ? <div className="overflow-x-auto">
             <table className="transcript-result-grid">
-              <thead><tr><th scope="col">科目</th><th scope="col">開課系所</th></tr></thead>
-              <tbody>{courseAssignments.map(({ key, courseName, courseCode, department, college, reason }) => <tr key={key}>
+              <thead><tr><th scope="col">科目</th><th scope="col">開課單位</th></tr></thead>
+              <tbody>{courseAssignments.map(({ key, courseName, courseCode, department, college, officialUnit, reason }) => <tr key={key}>
                 <td>{courseName}{courseCode && <small>{courseCode}</small>}</td>
-                <td>{department ?? (college ? `${college}・系所待確認` : "待確認")}
-                  {reason && <small>{reason === "home-department" ? "本科系同名配對" : "依入學年度必修表對照"}</small>}</td>
+                <td>{department ?? officialUnit ?? college ?? "待確認"}
+                  {reason && <small>{assignmentLabels[reason]}</small>}</td>
               </tr>)}</tbody>
             </table>
           </div> : <p className="mt-3 text-sm">這份成績單尚無可計入的修課紀錄。</p>}

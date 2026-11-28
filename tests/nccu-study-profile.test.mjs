@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import courseSeed from "../data/course-seed.json" with { type: "json" };
+import officialCatalog from "../data/nccu-transcript-catalog.json" with { type: "json" };
 import { buildNccuStudyProfile, classifyNccuCourse, departmentMascots, mascotIconPath, normalizeNccuDepartment } from "../lib/nccu-study-profile.ts";
 
 const catalog = [
@@ -150,6 +151,99 @@ test("each department has a unique mascot name and a bundled PNG icon", () => {
 test("uses an exact normalized title if the code supplies no catalog evidence", () => {
   const profile = buildNccuStudyProfile([transcript("", "　初級會計學(一) ")], catalog);
   assert.deepEqual(profile.departments, [{ name: "會計學系", count: 1 }]);
+});
+
+test("classifies both historical Reinsurance courses and leaves the section code blank when ambiguous", () => {
+  const courses = officialCatalog.courses.filter(([, title]) => title === "再保險")
+    .map(([code, title, unit, credits, offeredTerms]) => ({ id: code, school: "NCCU", code, title, unit, credits, offeredTerms }));
+
+  for (const code of ["", "308018001", "358939001"]) {
+    const profile = buildNccuStudyProfile([transcript(code, "再保險", "A-", "114-2")], courses);
+    const [assignment] = profile.courseAssignments;
+    assert.equal(assignment.courseCode, code);
+    assert.equal(assignment.department, "風險管理與保險學系");
+    assert.equal(profile.departments[0]?.count, 1);
+    assert.equal(profile.unclassifiedCount, 0);
+  }
+});
+
+test("uses the transcript semester to resolve courses with the same title across departments", () => {
+  const courses = officialCatalog.courses.filter(([, title]) => title === "基督教與社會")
+    .map(([code, title, unit, credits, offeredTerms]) => ({ id: code, school: "NCCU", code, title, unit, credits, offeredTerms }));
+
+  for (const [term, expected] of [["111-1", "政治學系"], ["114-2", "東亞研究所"], ["", undefined]]) {
+    const profile = buildNccuStudyProfile([transcript("", "基督教與社會", "A-", term)], courses);
+    assert.equal(profile.courseAssignments[0].department, expected);
+  }
+});
+
+test("uses the most frequent department for ambiguous Commerce common courses and preserves an exact code", () => {
+  const titles = ["經濟學", "統計學", "財務管理", "管理學", "會計學", "初級會計學（一）", "初級會計學（二）"];
+  const courses = officialCatalog.courses.filter(([, title]) => titles.includes(title))
+    .map(([code, title, unit, credits, offeredTerms]) => ({ id: code, school: "NCCU", code, title, unit, credits, offeredTerms }));
+  const cases = [
+    ["經濟學", "114-2", "經濟學系"],
+    ["統計學", "114-2", "統計學系"],
+    ["財務管理", "", "財務管理學系"],
+    ["管理學", "", "企業管理學系"],
+    ["會計學", "114-2", "會計學系"],
+  ];
+  for (const [title, term, expected] of cases) {
+    const { courseAssignments: [assignment] } = buildNccuStudyProfile([transcript("", title, "A-", term)], courses);
+    assert.equal(assignment.department, expected, title);
+    assert.equal(assignment.reason, "most-sections", title);
+    assert.equal(assignment.courseCode, "", title);
+  }
+
+  const { courseAssignments: [management] } = buildNccuStudyProfile([transcript("", "管理學", "A-", "114-1")], courses);
+  assert.equal(management.department, "企業管理學系");
+  assert.equal(management.reason, undefined);
+
+  const { courseAssignments: [accounting] } = buildNccuStudyProfile([transcript("363950001", "會計學", "A-", "114-2")], courses);
+  assert.equal(accounting.department, "企業管理研究所");
+  assert.equal(accounting.courseCode, "363950001");
+  assert.equal(accounting.reason, undefined);
+});
+
+test("counts a historical section once per semester and leaves tied departments unresolved", () => {
+  const offers = [
+    { id: "accounting", school: "NCCU", code: "303001001", title: "財務管理", unit: "會計系", offeredTerms: ["114-2"] },
+    { id: "finance", school: "NCCU", code: "307001001", title: "財務管理", unit: "財管系", offeredTerms: ["114-2"] },
+  ];
+  const rows = [transcript("", "財務管理", "A-", "114-2")];
+  const sameSection = { ...offers[1], id: "repeat", unit: "財管四" };
+  const [tied] = buildNccuStudyProfile(rows, [...offers, sameSection]).courseAssignments;
+  assert.equal(tied.department, undefined);
+  const [leading] = buildNccuStudyProfile(rows, [...offers, { ...sameSection, offeredTerms: ["114-1"] }]).courseAssignments;
+  assert.equal(leading.department, "財務管理學系");
+  assert.equal(leading.reason, "most-sections");
+});
+
+test("shows the verified opening unit for an official center course", () => {
+  const [code, title, unit, credits, offeredTerms] = officialCatalog.courses.find(([code]) => code === "088100011");
+  const profile = buildNccuStudyProfile([transcript(code, title, "A-", "114-2")], [
+    { id: code, school: "NCCU", code, title, unit, credits, offeredTerms },
+  ]);
+  assert.equal(profile.courseAssignments[0].officialUnit, "華語文中心");
+  assert.deepEqual(profile.departments, []);
+});
+
+test("keeps a valid record for every section and semester in the official transcript snapshot", () => {
+  const coverage = new Map(Object.keys(officialCatalog.coverage).map(term => [term, new Set()]));
+  for (const [code, title, unit, credits, terms] of officialCatalog.courses) {
+    assert.match(code, /^[A-Z0-9]{6}\d{3}$/u);
+    assert.ok(title && typeof unit === "string" && (credits === null || Number.isFinite(credits)), code);
+    assert.ok(terms.length && new Set(terms).size === terms.length, code);
+    for (const term of terms) {
+      assert.ok(coverage.has(term), term);
+      coverage.get(term).add(code);
+    }
+  }
+  for (const [term, codes] of coverage) {
+    assert.equal(codes.size, officialCatalog.coverage[term], term);
+  }
+  assert.ok(coverage.has("100-1"));
+  assert.ok(coverage.has("115-1"));
 });
 
 test("counts a known college once when listed with more than one of its units", () => {

@@ -103,6 +103,11 @@ export const transcriptUploads = sqliteTable(
   (table) => [index("transcript_uploads_user_id_idx").on(table.userId)],
 );
 
+export const transcriptAnalysisSources = sqliteTable("transcript_analysis_sources", {
+  userId: text("user_id").primaryKey().notNull().references(() => passwordUsers.id, { onDelete: "cascade" }),
+  transcriptId: text("transcript_id").notNull().references(() => transcriptUploads.id, { onDelete: "cascade" }),
+}, (table) => [index("transcript_analysis_sources_transcript_id_idx").on(table.transcriptId)]);
+
 export const transcriptCourseRows = sqliteTable(
   "transcript_course_rows",
   {

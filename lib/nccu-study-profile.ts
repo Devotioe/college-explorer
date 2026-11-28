@@ -7,12 +7,12 @@ type TranscriptCourse = {
   assignmentReason?: "home-department" | "curriculum";
 };
 
-type CatalogCourse = { id: string; school: string; code: string; title: string; unit: string };
+type CatalogCourse = { id: string; school: string; code: string; title: string; unit: string; credits?: number | null; offeredTerms?: readonly string[] };
 type Distribution<T extends string = string> = { name: T; count: number };
 type Classification = { college: string; department?: DepartmentName };
 type TeachingUnit = readonly [department: string, aliases: string, prefixes?: string];
 type DepartmentMascot = Distribution<DepartmentName> & { label: string; symbol: string };
-type CourseAssignment = { key: string; courseName: string; courseCode: string; college?: string; department?: DepartmentName; reason?: TranscriptCourse["assignmentReason"] };
+type CourseAssignment = { key: string; courseName: string; courseCode: string; college?: string; department?: DepartmentName; officialUnit?: string; reason?: TranscriptCourse["assignmentReason"] | "most-sections" };
 
 export type NccuStudyProfile = {
   colleges: Distribution[];
@@ -39,6 +39,7 @@ const units = [
     ["風險管理與保險學系", "風管 風險管理與保險系", "308 358"],
     ["企業管理研究所", "企研 MBA", "363"],
     ["科技管理與智慧財產研究所", "科管智財 科智 科博學 科博產", "364"],
+    ["國際經營管理英語碩士學位學程", "國營碩 IMBA", "933"],
   ]],
   ["社會科學學院", [
     ["政治學系", "政治 政治系", "202 252"],
@@ -54,6 +55,7 @@ const units = [
     ["亞太研究英語博士學位學程", "亞太博", "265"],
     ["亞太研究英語碩士學位學程", "亞太碩", "926"],
     ["應用經濟與社會發展英語碩士學位學程", "應社", "266"],
+    ["土地政策與環境規劃碩士原住民專班", "原碩專", "267"],
   ]],
   ["外國語文學院", [
     ["英國語文學系", "英文 英教", "501 551 951"],
@@ -75,8 +77,10 @@ const units = [
     ["宗教研究所", "宗教", "156"],
     ["台灣史研究所", "台史", "158"],
     ["台灣文學研究所", "台文", "159"],
-    ["華語文教學博士學位學程", "華文博", "160"],
+    ["華語文教學博士學位學程", "華文博 華文博程", "160"],
     ["華語文教學碩士學位學程", "華文碩 華文碩程", "161"],
+    ["東亞與現代世界形成國際研究生博士學位學程", "東世博", "163"],
+    ["國文教學碩士在職專班", "國教碩", "912"],
   ]],
   ["傳播學院", [
     ["新聞學系", "新聞", "401"],
@@ -87,6 +91,7 @@ const units = [
     ["傳播學院博士班", "傳播博", "463"],
     ["傳播學院傳播碩士學位學程", "傳播碩", "464"],
     ["亞際文化研究國際碩士學位學程", "亞際", "465"],
+    ["傳播學院碩士在職專班", "傳在碩", "941"],
   ]],
   ["法學院", [
     ["法律學系", "法律", "601 651"],
@@ -111,15 +116,17 @@ const units = [
     ["外交學系", "外交 外戰略", "203 253 922"],
     ["東亞研究所", "東亞", "260"],
     ["俄羅斯研究所", "俄研 俄羅", "263"],
-    ["日本研究碩士學位學程", "日學碩", "861"],
+    ["日本研究碩士學位學程", "日學碩 日本碩學程", "861"],
     ["日本研究博士學位學程", "日學博", "863"],
     ["國際研究英語碩士學位學程", "國研", "862"],
+    ["國家安全與大陸研究碩士在職專班", "國安碩", "981"],
   ]],
   ["教育學院", [
     ["教育學系", "教育", "102 152"],
     ["幼兒教育研究所", "幼教", "157"],
     ["教育行政與政策研究所", "教政", "171"],
     ["輔導與諮商碩士學位學程", "輔諮", "172"],
+    ["學校行政碩士在職專班", "學行碩", "911"],
   ]],
   ["創新國際學院", [
     ["創新國際學院學士班", "創國學", "ZU1"],
@@ -132,7 +139,7 @@ const units = [
 
 type DepartmentName = (typeof units)[number][1][number][0];
 
-export const departmentMascots = {
+export const departmentMascots: Partial<Record<DepartmentName, { label: string; symbol: string }>> = {
   國際經營與貿易學系: { label: "國貿貨輪", symbol: "🚢" },
   金融學系: { label: "金融金幣", symbol: "🪙" },
   會計學系: { label: "會計算盤", symbol: "🧮" },
@@ -209,7 +216,7 @@ export const departmentMascots = {
   創新國際學院學士班: { label: "創國火箭", symbol: "🚀" },
   全球傳播與創新科技碩士學位學程: { label: "全創衛星", symbol: "🛰️" },
   運動產業與文化學士學位學程: { label: "運動跑鞋", symbol: "👟" },
-} satisfies Record<DepartmentName, { label: string; symbol: string }>;
+};
 
 export function mascotIconPath(symbol: string, directory: "mascot-icons" | "mascot-results" = "mascot-icons") {
   const code = [...symbol.replace(/[\uFE0E\uFE0F]/gu, "")]
@@ -230,12 +237,14 @@ const collegeAliases: Record<string, string> = {
   國務院: "國際事務學院",
   教院: "教育學院",
   創國學院: "創新國際學院",
+  創國碩士: "創新國際學院",
+  資院: "資訊學院",
   X實驗學士: "X實驗學院",
 };
 
 const colleges = [...units.map(([college]) => college), "國際金融學院"];
 const aliases = units.flatMap(([college, departments]) => departments.flatMap(([department, shortNames]) =>
-  [department, ...shortNames.split(" ")].map((name) => ({ name, college, department })),
+  [department, ...shortNames.split(" ")].map((name) => ({ name: normalizeName(name), college, department })),
 )).sort((a, b) => b.name.length - a.name.length);
 const prefixes = new Map(units.flatMap(([college, departments]) => departments.flatMap(([department, , codes]) =>
   codes ? codes.split(" ").map((code) => [code, { college, department }] as const) : [],
@@ -243,6 +252,18 @@ const prefixes = new Map(units.flatMap(([college, departments]) => departments.f
 
 function normalizeName(value: string) {
   return value.normalize("NFKC").toLowerCase().replaceAll("臺", "台").replace(/[\s\p{P}\p{S}]/gu, "");
+}
+
+// NCCU Commerce undergraduate common coursework is documented in the RMI and MIS curricula.
+const commerceCoreTitles = new Set([
+  "企業概論", "管理學", "社會責任與倫理", "企業倫理與社會責任", "經濟學", "微積分", "商事法", "財務管理", "行銷管理",
+  "統計學", "統計學一", "統計學二", "初級會計學一", "初級會計學二",
+]);
+const accountingAliases = new Set(["會計學", "初級會計學"]);
+
+export function isNccuCommerceCoreTitle(title: string) {
+  const name = normalizeName(title);
+  return commerceCoreTitles.has(name) || accountingAliases.has(name);
 }
 
 function normalizeCode(value: string) {
@@ -253,8 +274,7 @@ function courseFamily(code: string) {
   return /^[A-Z0-9]{6}(?:\d{3})?$/.test(code) ? code.slice(0, 6) : code;
 }
 
-function startsWithUnit(label: string, unit: string) {
-  const name = normalizeName(unit);
+function startsWithUnit(label: string, name: string) {
   return label === name || (label.startsWith(name) && /^[一二三四五六七八九十甲乙丙丁碩博士班選系所\d]/u.test(label.slice(name.length)));
 }
 
@@ -262,12 +282,12 @@ export const nccuDepartments: readonly DepartmentName[] = units.flatMap(([, teac
 
 export function normalizeNccuDepartment(value: string): DepartmentName | undefined {
   const label = normalizeName(value).replace(/(?:學士班|大學部)$/u, "");
-  return aliases.find(({ name }) => normalizeName(name) === label || normalizeName(`${name}系`) === label)?.department;
+  return aliases.find(({ name }) => name === label || `${name}系` === label)?.department;
 }
 
 function matchesCollegeLabel(label: string, unit: string) {
-  if (startsWithUnit(label, unit)) return true;
   const name = normalizeName(unit);
+  if (startsWithUnit(label, name)) return true;
   return name.endsWith("院") && (label === `${name}學士` || label === `${name}學士班`);
 }
 
@@ -290,7 +310,13 @@ export function classifyNccuCourse(course: Pick<CatalogCourse, "unit" | "code">)
 
 function courseKey(course: CatalogCourse) {
   const code = courseFamily(normalizeCode(course.code));
-  return code ? JSON.stringify([code, normalizeName(course.title), normalizeName(course.unit)]) : course.id;
+  const unit = classifyNccuCourse(course)?.department ?? normalizeName(course.unit);
+  return code ? JSON.stringify([code, normalizeName(course.title), unit]) : course.id;
+}
+
+export function preferNccuTranscriptTerm<T extends { offeredTerms?: readonly string[] }>(courses: readonly T[], term: string) {
+  const offered = term ? courses.filter(({ offeredTerms }) => offeredTerms?.includes(term)) : [];
+  return offered.length ? offered : courses;
 }
 
 function soleCourse<T extends CatalogCourse>(candidates: readonly T[]) {
@@ -323,6 +349,24 @@ function uniqueLeader<T extends string>(counts: Distribution<T>[]) {
   return first && first.count > (second?.count ?? 0) ? first : undefined;
 }
 
+function mostFrequentDepartment(courses: readonly CatalogCourse[]): Classification | undefined {
+  const departments = new Map<DepartmentName, { college: string; offerings: Set<string> }>();
+  for (const course of courses) {
+    if (!course.offeredTerms?.length) continue;
+    const classification = classifyNccuCourse(course);
+    if (!classification?.department) continue;
+    const { college, department } = classification;
+    const entry = departments.get(department) ?? { college, offerings: new Set<string>() };
+    for (const term of course.offeredTerms) entry.offerings.add(`${term}:${normalizeCode(course.code)}`);
+    departments.set(department, entry);
+  }
+  const ranked = [...departments].map(([name, { offerings }]) => ({ name, count: offerings.size }))
+    .sort((a, b) => b.count - a.count);
+  const leader = uniqueLeader(ranked);
+  const entry = leader && departments.get(leader.name);
+  return leader && entry ? { college: entry.college, department: leader.name } : undefined;
+}
+
 export function buildNccuStudyProfile<T extends CatalogCourse>(rows: readonly TranscriptCourse[], catalog: readonly T[]): NccuStudyProfile {
   const nccu = catalog.filter((course) => course.school === "NCCU");
   const otherCodes = new Set(catalog.filter((course) => course.school !== "NCCU").map((course) => normalizeCode(course.code)));
@@ -343,25 +387,45 @@ export function buildNccuStudyProfile<T extends CatalogCourse>(rows: readonly Tr
     if (!code && !title) continue;
 
     const candidates = code ? (byCode.get(code) ?? byFamily.get(family)) : undefined;
-    let course: T | undefined;
+    let matches: readonly T[] = [];
     if (candidates) {
       // A contradictory title can come from an OCR suggestion for the wrong course.
-      course = soleCourse(title ? candidates.filter((candidate) => normalizeName(candidate.title) === title) : candidates);
+      matches = title ? candidates.filter((candidate) => normalizeName(candidate.title) === title) : candidates;
     } else if (title && (!code || !otherCodes.has(code))) {
-      course = soleCourse(byTitle.get(title) ?? []);
+      matches = byTitle.get(title) ?? [];
     }
-
-    const key = course ? `catalog:${courseKey(course)}` : `unmatched:${JSON.stringify([family, title])}`;
+    matches = preferNccuTranscriptTerm(matches, row.term);
+    if (!candidates && row.credits !== null) {
+      const matchingCredits = matches.filter(({ credits }) => credits === row.credits);
+      if (matchingCredits.length) matches = matchingCredits;
+    }
+    const course = soleCourse(matches);
+    let classification = course && classifyNccuCourse(course);
+    if (!course && matches.length > 1) {
+      const [first, ...others] = matches.map(classifyNccuCourse);
+      if (first?.department && others.every((match) => match?.department === first.department)) classification = first;
+    }
+    let inferred: Classification | undefined;
+    if (!code && accountingAliases.has(title)) {
+      inferred = mostFrequentDepartment([title, "初級會計學一", "初級會計學二"].flatMap((name) => byTitle.get(name) ?? []));
+    } else if (!code && !classification?.department && commerceCoreTitles.has(title)) {
+      inferred = mostFrequentDepartment(byTitle.get(title) ?? []);
+    }
+    if (inferred) classification = inferred;
+    const key = course && !inferred ? `catalog:${courseKey(course)}` : `unmatched:${JSON.stringify([family, title])}`;
     if (seen.has(key)) continue;
     seen.add(key);
 
-    const classification = course && classifyNccuCourse(course);
+    const openingUnits = new Set(matches.map(({ unit }) => unit.trim()));
+    const officialUnit = openingUnits.size === 1 ? matches[0].unit.trim() : undefined;
+    const codes = new Set(matches.map(({ code }) => normalizeCode(code)));
     courseAssignments.push({
       key,
-      courseName: course?.title ?? row.courseName,
-      courseCode: course?.code ?? row.courseCode,
+      courseName: inferred ? row.courseName : course?.title ?? row.courseName,
+      courseCode: !inferred && course && codes.size === 1 ? course.code : row.courseCode,
+      ...(!inferred && officialUnit ? { officialUnit } : {}),
       ...classification,
-      ...(course && row.assignmentReason ? { reason: row.assignmentReason } : {}),
+      ...(inferred ? { reason: "most-sections" } : course && row.assignmentReason ? { reason: row.assignmentReason } : {}),
     });
     if (!classification) {
       unclassifiedCount++;
@@ -376,7 +440,8 @@ export function buildNccuStudyProfile<T extends CatalogCourse>(rows: readonly Tr
   const rankedDepartments = orderedCounts(departmentCounts);
   const leadingCollege = uniqueLeader(rankedColleges)?.name;
   const leadingDepartment = uniqueLeader(rankedDepartments);
-  const departmentMascot = leadingDepartment ? { ...leadingDepartment, ...departmentMascots[leadingDepartment.name] } : null;
+  const mascot = leadingDepartment && departmentMascots[leadingDepartment.name];
+  const departmentMascot = leadingDepartment && mascot ? { ...leadingDepartment, ...mascot } : null;
   const titles: string[] = [];
   if (leadingCollege === "商學院") titles.push("商院狗");
   if (leadingCollege === "外國語文學院") titles.push("語文貓");

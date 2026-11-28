@@ -6,7 +6,8 @@ import { getDb } from "../../../db";
 import { transcriptUploads } from "../../../db/schema";
 import { getCurrentPasswordUser } from "../../../lib/password-auth";
 import { normalizeNccuDepartment } from "../../../lib/nccu-study-profile";
-import { normalizeTranscriptAcademicYear } from "../../../lib/transcript-review";
+import { readTranscriptLibrary } from "../../../lib/transcript-library";
+import { normalizeTranscriptAcademicYear, transcriptFileNameLimit } from "../../../lib/transcript-review";
 
 const confirmedTranscript = z.object({
   fileName: z.string().optional(),
@@ -23,10 +24,13 @@ const confirmedTranscript = z.object({
   })).max(300),
 });
 
-export async function GET() {
+export async function GET(request: Request) {
   const user = await getCurrentPasswordUser();
   if (!user) return NextResponse.json({ error: "請先登入" }, { status: 401 });
   if (!env.DB) return NextResponse.json({ error: "D1 尚未連線" }, { status: 503 });
+  if (new URL(request.url).searchParams.get("summary") === "1") {
+    return NextResponse.json(await readTranscriptLibrary(user.id));
+  }
   const transcripts = await getDb().select().from(transcriptUploads).where(eq(transcriptUploads.userId, user.id)).orderBy(desc(transcriptUploads.createdAt)).limit(30);
   if (!transcripts.length) return NextResponse.json({ transcripts: [] });
   const placeholders = transcripts.map(() => "?").join(",");
@@ -46,6 +50,7 @@ export async function POST(request: Request) {
   const parsed = confirmedTranscript.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: "成績單格式有誤，每份最多可保存 300 筆學期成績。" }, { status: 400 });
   const body = parsed.data;
+  if (body.fileType === "sample") return NextResponse.json({ error: "請使用上傳的成績單。" }, { status: 400 });
   const homeDepartment = body.homeDepartment ? normalizeNccuDepartment(body.homeDepartment) : undefined;
   const admissionYear = body.admissionYear ? normalizeTranscriptAcademicYear(body.admissionYear) : "";
   if ((body.homeDepartment && !homeDepartment) || (body.admissionYear && !admissionYear)) {
@@ -56,12 +61,14 @@ export async function POST(request: Request) {
   const transcriptId = crypto.randomUUID();
   const now = Date.now();
   const statements = [env.DB.prepare("INSERT INTO transcript_uploads (id, user_id, file_name, file_type, home_department, admission_year, status, created_at, confirmed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
-    .bind(transcriptId, user.id, (body.fileName ?? "成績單").slice(0, 160), (body.fileType ?? "unknown").slice(0, 80), homeDepartment ?? null, admissionYear || null, "confirmed", now, now)];
+    .bind(transcriptId, user.id, (body.fileName?.trim() || "成績單").slice(0, transcriptFileNameLimit), (body.fileType ?? "unknown").slice(0, 80), homeDepartment ?? null, admissionYear || null, "confirmed", now, now)];
   for (const row of rows) {
     const numeric = Number(row.gradeRaw);
     statements.push(env.DB.prepare("INSERT INTO transcript_course_rows (id, transcript_id, term, course_code, course_name, credits, grade_raw, grade_numeric, match_confidence, confirmed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)")
       .bind(crypto.randomUUID(), transcriptId, (row.term ?? "").slice(0, 20), (row.courseCode ?? "").slice(0, 40), row.courseName!.trim().slice(0, 160), row.credits ?? null, row.gradeRaw!.trim().slice(0, 20), Number.isFinite(numeric) ? numeric : null, Math.min(1, Math.max(0, row.confidence ?? 0))));
   }
+  statements.push(env.DB.prepare(`INSERT INTO transcript_analysis_sources (user_id, transcript_id) VALUES (?, ?)
+    ON CONFLICT (user_id) DO UPDATE SET transcript_id = excluded.transcript_id`).bind(user.id, transcriptId));
   await env.DB.batch(statements);
   return NextResponse.json({ transcript: { id: transcriptId, rows: rows.length, confirmedAt: now } }, { status: 201 });
 }

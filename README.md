@@ -54,6 +54,8 @@
 - `POST /api/auth/register|login|logout`、`GET /api/auth/me`：帳號與登入工作階段
 - `POST /api/ocr/transcript`：成績單 OCR 與政大課程比對
 - `GET|POST /api/transcripts`：列出及保存使用者確認後的成績單課程
+- `GET /api/transcripts?summary=1`：讀取成績單清單、目前分析來源及修課分析
+- `GET|PATCH|DELETE /api/transcripts/:id`：讀取、重新命名、設為分析來源或刪除成績單
 
 ## Local development
 
@@ -70,7 +72,7 @@ npm run dev
 /signin-with-chatgpt?return_to=/
 ```
 
-要啟用真正的成績單 OCR，請在 Cloudflare Worker secret 設定 `OPENAI_API_KEY`；可選擇以 `OPENAI_OCR_MODEL` 指定支援影像與 PDF 的模型。未設定金鑰時，前端仍可用範例辨識結果測試完整確認流程。原始成績單只傳送給 OCR API，不會寫入 D1；D1 僅保存使用者確認後的課程列。
+要啟用成績單 OCR，請在 Cloudflare Worker secret 設定 `OPENAI_API_KEY`。可選擇以 `OPENAI_OCR_MODEL` 指定支援影像與 PDF 的模型。辨識影像會傳送給 OCR API。D1 僅保存使用者確認後的課程列。
 
 更新清大資料：
 
@@ -92,6 +94,8 @@ node scripts/refresh-nthu-course-syllabi.mjs
 `data/nccu-offerings.json` 收錄現有政大課程目錄在 111-1 至 115-1 的官方開課班次。網站以這份快照補足代表課號，課程介紹與修課心得仍以原課程 ID 讀取。課表有異動時可執行 `node scripts/refresh-nccu-offerings.mjs` 更新快照。若只需重跑配對並沿用已下載的分院資料，可加上 `--reuse-cache`。
 
 資料來源為政大[全校課程查詢系統](https://qrysub.nccu.edu.tw/)及教務處的[節次時間對照表](https://aca.nccu.edu.tw/zh/%E9%81%B8%E8%AA%B2%E8%A8%8A%E6%81%AF/%E8%AA%B2%E7%A8%8B%E8%B3%87%E8%A8%8A-1/%E5%90%84%E7%AF%80%E6%AC%A1%E4%B8%8A%E8%AA%B2%E6%99%82%E9%96%93%E5%B0%8D%E7%85%A7%E8%A1%A8?tmpl=component)。
+
+成績單使用 `data/nccu-transcript-catalog.json` 配對歷年課程。執行 `node scripts/refresh-nccu-offerings.mjs --transcript-catalog` 可依政大目前公布的學期清單更新快照。
 
 ```bash
 node scripts/build-nccu-course-index.mjs
@@ -137,6 +141,8 @@ node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0001_lethal_gressill.sql
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0002_sloppy_risque.sql
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0003_fearless_unicorn.sql
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0004_transcript_home_department.sql
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0005_transcript_analysis_source.sql
 ```
 
 不要重複執行已經套用的 migration。

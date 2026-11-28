@@ -2,12 +2,52 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   assignTranscriptSemester, confirmedTranscriptRows, editSemesterGrade, groupTranscriptForReview, normalizeTranscriptTerm,
-  resolveOcrTranscriptPeriod,
+  resolveOcrTranscriptPeriod, resolveTranscriptYearHeader, transcriptRowsFromYearLine,
 } from "../lib/transcript-review.ts";
 
 function grade(id, term, gradeRaw, overrides = {}) {
   return { id, courseName: "計算機概論", courseCode: "306005001", term, gradeRaw, credits: 2, confidence: .94, ...overrides };
 }
+
+test("a shared course line keeps both semesters in the academic year printed in the heading", () => {
+  const year = resolveTranscriptYearHeader({ academicYear: "111", beginningYear: "111", endingYear: "112" });
+  const rows = transcriptRowsFromYearLine({
+    year, earliestYear: "", courseName: "普通心理學",
+    upper: { credits: 3, grade: "93.00" }, lower: { credits: 3, grade: "79.00" },
+  });
+  assert.deepEqual(rows.map(({ term, credits, gradeRaw }) => [term, credits, gradeRaw]),
+    [["111-1", 3, "93.00"], ["111-2", 3, "79.00"]]);
+  assert.equal(rows[0].sourceLine, rows[1].sourceLine);
+  const review = groupTranscriptForReview(rows);
+  assert.equal(review.length, 1);
+  assert.equal(review[0].year, "111");
+  assert.equal(review[0].semesters["2"].gradeRaw, "79.00");
+});
+
+test("a blank semester stays empty and W or IP stays in its printed semester", () => {
+  const base = { year: "114", earliestYear: "", courseName: "體育" };
+  const spring = transcriptRowsFromYearLine({
+    ...base, upper: { grade: "－－", present: true }, lower: { credits: 1, grade: "IP" },
+  });
+  const autumn = transcriptRowsFromYearLine({
+    ...base, upper: { credits: 1, grade: "W" }, lower: {},
+  });
+  assert.deepEqual([...spring, ...autumn].map(({ term, gradeRaw }) => [term, gradeRaw]),
+    [["114-2", "IP"], ["114-1", "W"]]);
+  assert.equal(groupTranscriptForReview([...spring, ...autumn]).length, 2);
+});
+
+test("an unclear or conflicting year header leaves the known semester for review", () => {
+  for (const academicYear of ["112", ""]) {
+    const year = resolveTranscriptYearHeader({ academicYear, beginningYear: "111", endingYear: "112" });
+    const rows = transcriptRowsFromYearLine({
+      year, earliestYear: "", courseName: "普通心理學", upper: {}, lower: { credits: 3, grade: "79.00" },
+    });
+    assert.equal(rows[0].term, "");
+    assert.equal(rows[0].recognizedSemester, "2");
+  }
+  assert.equal(resolveTranscriptYearHeader({ academicYear: "113", beginningYear: "", endingYear: "" }), "113");
+});
 
 test("keeps unreadable courses as separate rows and requires a title before saving", () => {
   const review = groupTranscriptForReview([

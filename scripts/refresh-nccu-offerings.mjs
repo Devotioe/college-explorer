@@ -5,9 +5,13 @@ import { promisify } from "node:util";
 const curl = process.platform === "win32" ? "curl.exe" : "curl";
 const exec = promisify(execFile);
 const unitUrl = "https://qrysub.nccu.edu.tw/assets/api/unit.json";
+const semesterUrl = "https://qrysub.nccu.edu.tw/assets/api/semesterlist_c.json";
 const api = "https://es.nccu.edu.tw/course/zh-TW/";
 const cacheDir = new URL("../.wrangler/nccu-offerings-source/", import.meta.url);
+const transcriptCacheDir = new URL("transcript-listings/", cacheDir);
 const outputUrl = new URL("../data/nccu-offerings.json", import.meta.url);
+const transcriptOutputUrl = new URL("../data/nccu-transcript-catalog.json", import.meta.url);
+const transcriptOnly = process.argv.includes("--transcript-catalog");
 const seed = JSON.parse(await readFile(new URL("../data/course-seed.json", import.meta.url), "utf8"));
 const catalog = seed.records.filter(({ course }) => course.school === "NCCU").map(({ course }) => course);
 const semesters = [...new Set(catalog.flatMap((course) => course.offeredTerms.filter((term) => /^\d{3}-[12]$/.test(term))))].sort();
@@ -41,20 +45,26 @@ async function fetchUnit(semester, node, path = [node.utCodL1]) {
   const nextDepth = path.length + 1;
   const partitions = children(node[`utL${nextDepth}`] ?? [], nextDepth);
   if (!partitions.length) throw new Error(`Truncated response for ${semester} ${path.join("/")}`);
-  const expanded = new Map(rows.map((row) => [row.subNum, row]));
+  const descendants = new Map();
   for (const child of partitions) {
     for (const row of await fetchUnit(semester, child, [...path, child[`utCodL${nextDepth}`]])) {
-      expanded.set(row.subNum, row);
+      descendants.set(row.subNum, row);
     }
   }
-  if (expanded.size <= maxRows) throw new Error(`Could not verify complete partition ${semester} ${path.join("/")}`);
+  const expanded = new Map([...rows.map((row) => [row.subNum, row]), ...descendants]);
+  if (expanded.size <= maxRows && !rows.every(({ subNum }) => descendants.has(subNum))) {
+    throw new Error(`Could not verify complete partition ${semester} ${path.join("/")}`);
+  }
   return [...expanded.values()];
 }
 
 async function fetchSemester(semester, units) {
   const file = new URL(`${semester}.json`, cacheDir);
   if (process.argv.includes("--reuse-cache")) {
-    try { return JSON.parse(await readFile(file, "utf8")); }
+    try {
+      const cached = JSON.parse(await readFile(file, "utf8"));
+      if (!transcriptOnly || cached.every((row) => "department" in row && "credits" in row)) return cached;
+    }
     catch (error) { if (error.code !== "ENOENT") throw error; }
   }
   const rows = [];
@@ -69,8 +79,9 @@ async function fetchSemester(semester, units) {
 }
 
 function projectRows(rows) {
-  return rows.map(({ y, s, subNum, subNam, teaNam, subTime, teaSchmUrl, langTpe }) => ({
+  return rows.map(({ y, s, subNum, subNam, teaNam, subTime, teaSchmUrl, langTpe, subGde, subPoint }) => ({
     semester: `${y}-${s}`, code: subNum, title: subNam, teacher: teaNam, slots: subTime, sourceUrl: teaSchmUrl, language: langTpe,
+    department: subGde?.trim() || "", credits: /^\d+(?:\.\d+)?$/.test(subPoint ?? "") ? Number(subPoint) : null,
   }));
 }
 
@@ -87,8 +98,97 @@ function titleKey(title) {
   return title.normalize("NFKC").replace(/[\s\p{P}\p{S}]/gu, "").replace(/台/g, "臺").toLowerCase();
 }
 
+async function fetchTranscriptPrefix(root, prefix) {
+  const matches = await readJson(`${root}${prefix}%20/`);
+  const rows = matches.filter(({ subNum }) => subNum?.startsWith(prefix));
+  if (matches.length < maxRows) return rows;
+  if (prefix.length >= 6) throw new Error(`Truncated keyword search for ${root} ${prefix}`);
+  for (const digit of "0123456789") rows.push(...await fetchTranscriptPrefix(root, `${prefix}${digit}`));
+  return rows;
+}
+
+async function fetchTranscriptListings(semester) {
+  const file = new URL(`${semester}.json`, transcriptCacheDir);
+  if (process.argv.includes("--reuse-cache")) {
+    try { return JSON.parse(await readFile(file, "utf8")); }
+    catch (error) { if (error.code !== "ENOENT") throw error; }
+  }
+
+  const root = `${api}:sem=${semester.replace("-", "")}%20`;
+  const rows = await readJson(`${root}/`);
+  if (!rows.length) throw new Error(`No school-wide course listing for ${semester}`);
+  for (let offset = 0; offset < 8; offset += 4) {
+    const weekdays = Array.from({ length: 4 }, (_, index) => offset + index);
+    const daily = await Promise.all(weekdays.map((day) => readJson(`${root}:week=${day}%20/`)));
+    for (const [index, dayRows] of daily.entries()) {
+      rows.push(...dayRows);
+      if (dayRows.length < maxRows) continue;
+      const partitions = await Promise.all([1, 2, 3, 4].map((period) =>
+        readJson(`${root}:week=${weekdays[index]}%20:dsec=${period}%20/`)));
+      if (partitions.some((periodRows) => periodRows.length >= maxRows)) {
+        throw new Error(`Truncated timetable partition for ${semester} weekday ${weekdays[index]}`);
+      }
+      rows.push(...partitions.flat());
+    }
+  }
+
+  // These historical groups can be omitted by the college tree and have flexible sessions.
+  const prefixes = ["042", "045", "088", "089", "0T0"];
+  const extra = await Promise.all(prefixes.map((prefix) => fetchTranscriptPrefix(root, prefix)));
+  rows.push(...extra.flat());
+  const projected = projectRows(rows);
+  if (projected.some((row) => row.semester !== semester)) throw new Error(`Incorrect timetable results for ${semester}`);
+  const distinct = [...new Map(projected.map((row) => [JSON.stringify([row.code, row.title, row.department, row.credits]), row])).values()];
+  await writeFile(file, JSON.stringify(distinct));
+  return distinct;
+}
+
+async function writeTranscriptCatalog(units) {
+  const listed = await readJson(semesterUrl);
+  const publishedTerms = [...new Set(listed.map(({ y, s }) => `${y}-${s}`).filter((term) => /^\d{3}-[12]$/.test(term)))].sort();
+  if (!publishedTerms.length) throw new Error("No published transcript semesters");
+  await mkdir(transcriptCacheDir, { recursive: true });
+  const records = new Map();
+  const coverage = {};
+  const readSemester = async (semester) => {
+    const [unitRows, programRows, listings] = await Promise.all([
+      fetchSemester(semester, units), fetchProgramOfferings(semester), fetchTranscriptListings(semester),
+    ]);
+    return { semester, rows: [...unitRows, ...programRows, ...listings] };
+  };
+  for (let offset = 0; offset < publishedTerms.length; offset += 2) {
+    const batch = await Promise.all(publishedTerms.slice(offset, offset + 2).map(readSemester));
+    for (const { semester, rows } of batch) {
+      const codes = new Set();
+      for (const { code, title, department, credits } of rows) {
+        if (!/^[a-z\d]{6}\d{3}$/i.test(code ?? "") || !title?.trim()) continue;
+        const fields = [code.toUpperCase(), title.trim(), department, credits];
+        const key = JSON.stringify(fields);
+        const record = records.get(key);
+        if (record) record[4].add(semester);
+        else records.set(key, [...fields, new Set([semester])]);
+        codes.add(fields[0]);
+      }
+      if (!codes.size) throw new Error(`Missing transcript course data for ${semester}`);
+      coverage[semester] = codes.size;
+      console.log(`${semester}: checked ${codes.size} official section codes.`);
+    }
+  }
+  const courses = [...records.values()].sort(([a, titleA, unitA, creditsA], [b, titleB, unitB, creditsB]) =>
+    a.localeCompare(b) || titleA.localeCompare(titleB) || unitA.localeCompare(unitB) || (creditsA ?? -1) - (creditsB ?? -1))
+    .map(([code, title, unit, credits, terms]) => [code, title, unit, credits, [...terms].reverse()]);
+  const pending = new URL(`${transcriptOutputUrl.href}.tmp`);
+  await writeFile(pending, `{"sourceUrl":"https://qrysub.nccu.edu.tw/","coverage":${JSON.stringify(coverage)},"courses":[\n${courses.map((row) => JSON.stringify(row)).join(",\n")}\n]}\n`);
+  await rename(pending, transcriptOutputUrl);
+  console.log(`Wrote ${courses.length} distinct transcript catalog records.`);
+}
+
 await mkdir(cacheDir, { recursive: true });
 const units = children(await readJson(unitUrl), 1);
+if (transcriptOnly) {
+  await writeTranscriptCatalog(units);
+  process.exit(0);
+}
 const bySubject = new Map(catalog.map((course) => [course.code.slice(0, 6), course]));
 if (bySubject.size !== catalog.length) throw new Error("Multiple catalog courses share a subject code");
 const grouped = new Map();

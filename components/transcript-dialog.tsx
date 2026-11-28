@@ -1,21 +1,13 @@
 "use client";
 
-import { ArrowLeft, FileText, History, LoaderCircle, ScanLine, ShieldCheck, Trash2, UploadCloud, X } from "lucide-react";
+import { ArrowLeft, Check, FileText, History, LoaderCircle, ScanLine, ShieldCheck, Trash2, UploadCloud, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { nccuRequirementTableUrl } from "../lib/curricula";
 import { classifyNccuCourse, nccuDepartments } from "../lib/nccu-study-profile";
 import {
-  assignTranscriptSemester, confirmedTranscriptRows, editSemesterGrade, groupTranscriptForReview, semesterLabels,
-  type Semester, type TranscriptHistory, type TranscriptReviewRow, type TranscriptRow,
+  assignTranscriptSemester, confirmedTranscriptRows, editSemesterGrade, groupTranscriptForReview, semesterLabels, transcriptFileNameLimit,
+  type Semester, type TranscriptHistory, type TranscriptLibrary, type TranscriptReviewRow, type TranscriptRow,
 } from "../lib/transcript-review";
-
-const sampleRows: TranscriptRow[] = [
-  { id: "sample-1", term: "114-1", courseCode: "306005001", courseName: "計算機概論", credits: 3, gradeRaw: "87", confidence: .98 },
-  { id: "sample-2", term: "114-2", courseCode: "306005001", courseName: "計算機概論", credits: 3, gradeRaw: "90", confidence: .96 },
-  { id: "sample-3", term: "114-2", courseCode: "306009001", courseName: "系統分析與設計", credits: 3, gradeRaw: "91", confidence: .97 },
-  { id: "sample-4", term: "114-1", courseCode: "302018001", courseName: "銀行經營管理", credits: 3, gradeRaw: "84", confidence: .94 },
-  { id: "sample-5", term: "114-2", courseCode: "302032011", courseName: "金融法規", credits: 3, gradeRaw: "W", confidence: .95 },
-];
 
 type Draft = { fileName: string; fileType: string; courses: TranscriptReviewRow[]; warnings: string[]; originalUrl?: string;
   homeDepartment: string; admissionYear: string };
@@ -62,14 +54,22 @@ function SemesterField({ row, semester, position, homeDepartment, update }: {
   </>;
 }
 
-export function TranscriptDialog({ displayName, close }: { displayName: string; close: () => void }) {
+type HistoryEdit = { kind: "rename"; id: string; fileName: string } | { kind: "delete"; id: string };
+
+export function TranscriptDialog({ displayName, close, library, libraryError, onLibraryChange }: {
+  displayName: string; close: () => void; library?: TranscriptLibrary; libraryError?: string;
+  onLibraryChange: (library: TranscriptLibrary) => void;
+}) {
   const [file, setFile] = useState<File | null>(null);
   const [uploadDepartment, setUploadDepartment] = useState("");
   const [draft, setDraft] = useState<Draft | null>(null);
   const [status, setStatus] = useState("");
   const [processing, setProcessing] = useState(false);
-  const [history, setHistory] = useState<TranscriptHistory[]>([]);
-  const [historyStatus, setHistoryStatus] = useState("正在讀取紀錄…");
+  const [historyEdit, setHistoryEdit] = useState<HistoryEdit | null>(null);
+  const [historyMessage, setHistoryMessage] = useState("");
+  const history = library?.transcripts ?? [];
+  const activeId = library?.activeTranscript?.id;
+  const historyStatus = libraryError ?? (!library ? "正在讀取紀錄…" : history.length ? "" : "尚無成績單紀錄。");
   const originalUrl = draft?.originalUrl;
   const pendingYears = draft?.courses.filter((row) => !row.year).length ?? 0;
   const pendingNames = draft?.courses.filter((row) => !row.courseName.trim()
@@ -79,31 +79,52 @@ export function TranscriptDialog({ displayName, close }: { displayName: string; 
     if (originalUrl) return () => URL.revokeObjectURL(originalUrl);
   }, [originalUrl]);
 
-  useEffect(() => {
-    const controller = new AbortController();
-    void fetch("/api/transcripts", { signal: controller.signal }).then(async (response) => {
-      if (!response.ok) throw new Error();
-      const { transcripts } = await response.json() as { transcripts: TranscriptHistory[] };
-      if (!controller.signal.aborted) {
-        setHistory(transcripts);
-        setHistoryStatus(transcripts.length ? "" : "尚無成績單紀錄。");
-      }
-    }).catch(() => {
-      if (!controller.signal.aborted) setHistoryStatus("目前無法讀取先前的紀錄。");
-    });
-    return () => controller.abort();
-  }, []);
-
   function startReview(rows: TranscriptRow[], fileName: string, fileType: string, source?: File, warnings: string[] = [],
     homeDepartment = "", admissionYear = "") {
     setDraft({ fileName, fileType, courses: groupTranscriptForReview(rows), warnings, homeDepartment, admissionYear,
       originalUrl: source && URL.createObjectURL(source) });
-    setStatus(rows.length ? "" : "這份檔案沒有辨識出科目，可以手動新增。");
+    setStatus("");
   }
 
   function editCourses(edit: (courses: TranscriptReviewRow[]) => TranscriptReviewRow[]) {
     setDraft((value) => value && { ...value, courses: edit(value.courses) });
     setStatus("");
+  }
+
+  async function reviewHistory(id: string) {
+    setProcessing(true);
+    setHistoryMessage("正在讀取成績單…");
+    try {
+      const response = await fetch(`/api/transcripts/${encodeURIComponent(id)}`);
+      const data = await response.json() as { transcript?: TranscriptHistory; error?: string };
+      if (!response.ok || !data.transcript) throw new Error(data.error ?? "無法讀取成績單。");
+      const { rows, fileName, fileType, homeDepartment, admissionYear } = data.transcript;
+      setHistoryMessage("");
+      startReview(rows, fileName, fileType, undefined, [], homeDepartment ?? "", admissionYear ?? "");
+    } catch (error) {
+      setHistoryMessage(error instanceof Error ? error.message : "無法讀取成績單。");
+    } finally {
+      setProcessing(false);
+    }
+  }
+
+  async function updateHistory(id: string, body?: { fileName: string } | { active: true }) {
+    setProcessing(true);
+    setHistoryMessage("");
+    try {
+      const response = await fetch(`/api/transcripts/${encodeURIComponent(id)}`, body
+        ? { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }
+        : { method: "DELETE" });
+      const data = await response.json() as TranscriptLibrary & { error?: string };
+      if (!response.ok) throw new Error(data.error ?? "無法更新成績單，請稍後再試。");
+      onLibraryChange(data);
+      setHistoryEdit(null);
+      setHistoryMessage(body ? ("active" in body ? "已切換分析來源。" : "已更新成績單檔名。") : "已刪除成績單。");
+    } catch (error) {
+      setHistoryMessage(error instanceof Error ? error.message : "無法更新成績單，請稍後再試。");
+    } finally {
+      setProcessing(false);
+    }
   }
 
   async function runOcr() {
@@ -154,8 +175,8 @@ export function TranscriptDialog({ displayName, close }: { displayName: string; 
     <div className="transcript-dialog" role="dialog" aria-modal="true" aria-labelledby="transcript-review-title" onMouseDown={(event) => event.stopPropagation()}>
       <header className="transcript-header">
         <div>
-          <h2 id="transcript-review-title"><ScanLine size={22} />{draft ? "核對科目與學期成績" : "上傳政大成績單"}</h2>
-          <p>{draft ? "可修改學年度、科目名稱和分數。未修或未辨識到的成績可留空。" : `${displayName}，選擇一份成績單開始辨識。`}</p>
+          <h2 id="transcript-review-title"><ScanLine size={22} />{draft ? "核對科目與學期成績" : "管理政大成績單"}</h2>
+          <p>{draft ? `來源：${draft.fileName}。請核對學年度、科目與成績。` : `${displayName}，選擇一份成績單開始辨識。`}</p>
         </div>
         <button type="button" className="modal-close static" aria-label="關閉" onClick={closeWhenIdle} disabled={processing}><X size={17} /></button>
       </header>
@@ -269,23 +290,51 @@ export function TranscriptDialog({ displayName, close }: { displayName: string; 
             {processing ? <LoaderCircle className="animate-spin" size={16} /> : <ScanLine size={16} />}開始 OCR
           </button>
         </section>
-        <div className="transcript-toolbar">
+        {status && <div className="transcript-toolbar">
           <p role="status">{status}</p>
-          <button disabled={processing} onClick={() => startReview(sampleRows, "範例成績單", "sample")}>載入範例測試</button>
-        </div>
+        </div>}
         <section className="transcript-history mb-6">
           <div className="transcript-history-heading"><h3><History size={17} />過去成績單</h3><span>{history.length} 份</span></div>
-          {historyStatus ? <p className="history-empty">{historyStatus}</p> : <div className="history-card-list">{history.map((entry) => <div key={entry.id} className="history-card">
-            <span className="history-card-icon"><FileText size={17} /></span>
-            <span className="min-w-0 flex-1">
-              <strong>{entry.fileName}</strong><small>{entry.rows.length} 筆學期成績</small>
-              <span className="transcript-history-actions">
-                <a href={`/transcripts/${encodeURIComponent(entry.id)}`}>查看結果</a>
-                <button disabled={processing} onClick={() => startReview(entry.rows, entry.fileName, entry.fileType, undefined, [],
-                  entry.homeDepartment ?? "", entry.admissionYear ?? "")}>載入核對</button>
-              </span>
-            </span>
-          </div>)}</div>}
+          {historyMessage && <p className="history-empty" role="status">{historyMessage}</p>}
+          {historyStatus ? <p className="history-empty">{historyStatus}</p> : <div className="history-card-list">{history.map((entry) => {
+            const active = entry.id === activeId;
+            const sample = entry.fileType === "sample";
+            const edit = historyEdit?.id === entry.id ? historyEdit : null;
+            return <div key={entry.id} className="history-card" data-active={active}>
+              <span className="history-card-icon" aria-hidden="true">{active ? <Check size={17} /> : <FileText size={17} />}</span>
+              <div className="min-w-0 flex-1">
+                <strong title={entry.fileName}>{entry.fileName}</strong>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span>{entry.rowCount} 筆學期成績</span>
+                  {sample && <span>範例資料</span>}
+                  {active && <span className="transcript-source-badge">使用中</span>}
+                </div>
+                {edit?.kind === "rename" ? <form className="transcript-history-edit" onSubmit={(event) => {
+                  event.preventDefault();
+                  if (edit.fileName.trim() && !processing) void updateHistory(entry.id, { fileName: edit.fileName });
+                }}>
+                  <input aria-label="新的成績單檔名" autoFocus maxLength={transcriptFileNameLimit} required disabled={processing} value={edit.fileName}
+                    onChange={(event) => setHistoryEdit({ ...edit, fileName: event.target.value })} />
+                  <div className="transcript-history-actions">
+                    <button type="submit" disabled={processing || !edit.fileName.trim()}>儲存名稱</button>
+                    <button type="button" disabled={processing} onClick={() => setHistoryEdit(null)}>取消</button>
+                  </div>
+                </form> : edit?.kind === "delete" ? <div className="transcript-history-edit">
+                  <p>刪除「{entry.fileName}」及已儲存的成績？</p>
+                  <div className="transcript-history-actions">
+                    <button type="button" className="transcript-delete" disabled={processing} onClick={() => void updateHistory(entry.id)}>確認刪除</button>
+                    <button type="button" disabled={processing} onClick={() => setHistoryEdit(null)}>取消</button>
+                  </div>
+                </div> : <div className="transcript-history-actions">
+                  {!active && !sample && <button type="button" className="transcript-use" disabled={processing} onClick={() => void updateHistory(entry.id, { active: true })}>用這份分析</button>}
+                  {!sample && <a href={`/transcripts/${encodeURIComponent(entry.id)}`}>查看結果</a>}
+                  {!sample && <button type="button" disabled={processing} onClick={() => void reviewHistory(entry.id)}>載入核對</button>}
+                  <button type="button" disabled={processing} onClick={() => setHistoryEdit({ kind: "rename", id: entry.id, fileName: entry.fileName })}>重新命名</button>
+                  <button type="button" className="transcript-delete" disabled={processing} onClick={() => setHistoryEdit({ kind: "delete", id: entry.id })}>刪除</button>
+                </div>}
+              </div>
+            </div>;
+          })}</div>}
         </section>
       </>}
     </div>

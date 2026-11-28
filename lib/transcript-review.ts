@@ -1,3 +1,7 @@
+import type { NccuStudyProfile } from "./nccu-study-profile";
+
+export const transcriptFileNameLimit = 160;
+
 export type TranscriptCandidate = {
   code: string;
   title: string;
@@ -30,6 +34,12 @@ export type TranscriptHistory = {
   createdAt: string;
   confirmedAt: string | null;
   rows: TranscriptRow[];
+};
+
+export type TranscriptLibrary = {
+  transcripts: (Omit<TranscriptHistory, "rows"> & { rowCount: number })[];
+  activeTranscript: TranscriptHistory | null;
+  profile: NccuStudyProfile | null;
 };
 
 export type Semester = "1" | "2" | "3";
@@ -77,6 +87,44 @@ export function resolveOcrTranscriptPeriod(yearLabel: string, semesterLabel: str
   const semester = semesters[printedSemester];
   if (!year || (earliestYear && Number(year) < Number(earliestYear))) return { term: "", recognizedSemester: semester };
   return { term: semester ? `${year}-${semester}` : year };
+}
+
+export function resolveTranscriptYearHeader({ academicYear, beginningYear, endingYear }: {
+  academicYear: string; beginningYear: string; endingYear: string;
+}) {
+  const year = normalizeTranscriptAcademicYear(academicYear);
+  const start = normalizeTranscriptAcademicYear(beginningYear);
+  const end = normalizeTranscriptAcademicYear(endingYear);
+  if (!year || (start && start !== year) || (end && Number(end) !== Number(year) + 1)) return "";
+  return year;
+}
+
+type SemesterReading = { credits?: number | null; grade?: string; present?: boolean };
+
+function readSemesterMark(value: string | undefined) {
+  const grade = value?.normalize("NFKC").trim() ?? "";
+  if (/^\d{1,3}(?:\.\d{1,2})?$/u.test(grade)) return Number(grade) <= 100 ? grade : "";
+  return /^(?:[A-FIPRSUW][+-]?|IP|NP|通過|不通過|抵免|免修|退選|停修|及格|不及格)$/iu.test(grade) ? grade.toUpperCase() : "";
+}
+
+export function transcriptRowsFromYearLine({ year, earliestYear, courseName, upper, lower, numbered = false }: {
+  year: string; earliestYear: string; courseName: string; upper: SemesterReading; lower: SemesterReading; numbered?: boolean;
+}): TranscriptRow[] {
+  const sourceLine = `ocr-${crypto.randomUUID()}`;
+  const rows = ([{ period: "1", reading: upper }, { period: "2", reading: lower }] as const).flatMap<TranscriptRow>(({ period, reading }) => {
+    const credits = typeof reading.credits === "number" && Number.isFinite(reading.credits) && reading.credits >= 0 && reading.credits <= 20
+      ? reading.credits : null;
+    const gradeRaw = readSemesterMark(reading.grade);
+    const onlyDash = /^[\s\p{Pd}−]+$/u.test(reading.grade?.trim() ?? "");
+    const present = numbered ? reading.present : (Boolean(gradeRaw) || credits !== null || (reading.present && !onlyDash));
+    if (!present) return [];
+    return [{ id: `${sourceLine}-${period}`, sourceLine, ...resolveOcrTranscriptPeriod(year, period, earliestYear),
+      courseName, courseCode: "", credits, gradeRaw, confidence: courseName && gradeRaw ? .85 : 0,
+      requiresOcrReview: !courseName || !gradeRaw ? true : undefined }];
+  });
+  if (rows.length || !courseName) return rows;
+  return [{ id: sourceLine, sourceLine, ...resolveOcrTranscriptPeriod(year, "", earliestYear),
+    courseName, courseCode: "", credits: null, gradeRaw: "", confidence: .7, ungraded: true }];
 }
 
 function courseFamily(code: string) {
