@@ -1,13 +1,47 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  assignTranscriptSemester, confirmedTranscriptRows, editSemesterGrade, groupTranscriptForReview, normalizeTranscriptTerm,
-  resolveOcrTranscriptPeriod, resolveTranscriptYearHeader, transcriptRowsFromYearLine,
+  applyTranscriptTitleCorrections, assignTranscriptSemester, confirmedTranscriptRows, editSemesterGrade, groupTranscriptForReview, normalizeTranscriptTerm,
+  resolveOcrTranscriptPeriod, resolveTranscriptYearHeader, consolidateTranscriptSummaries, normalizeTranscriptSummaryValue,
+  transcriptCreditCheck, transcriptRowsFromYearLine,
 } from "../lib/transcript-review.ts";
 
 function grade(id, term, gradeRaw, overrides = {}) {
   return { id, courseName: "計算機概論", courseCode: "306005001", term, gradeRaw, credits: 2, confidence: .94, ...overrides };
 }
+
+test("fills the catalog title before review and retains the OCR text and original semester and marks", () => {
+  const courseName = "國際經済學";
+  const sourceLine = "printed-line";
+  const rows = [grade("fall", "113-1", "89.00", { courseName, sourceLine }), grade("spring", "113-2", "94.50", { courseName, sourceLine })];
+  const candidate = { title: "國際經濟學", code: "catalog", confidence: .8, department: "經濟系", credits: 3 };
+  const corrections = rows.map(({ id }) => ({ id, courseName: candidate.title, ocrCourseName: courseName, candidate }));
+  const [review] = groupTranscriptForReview(applyTranscriptTitleCorrections(rows, corrections));
+  assert.equal(review.courseName, candidate.title);
+  assert.equal(review.ocrCourseName, courseName);
+  assert.equal(review.requiresTitleReview, true);
+  assert.deepEqual(confirmedTranscriptRows([review]).rows.map(({ term, gradeRaw, credits, courseCode }) => [term, gradeRaw, credits, courseCode]), [
+    ["113-1", "89.00", 2, "306005001"], ["113-2", "94.50", 2, "306005001"],
+  ]);
+});
+
+test("keeps printed decimals and leaves conflicting semester totals unresolved", () => {
+  assert.equal(normalizeTranscriptSummaryValue(" ８６.２４０ "), "86.240");
+  assert.equal(normalizeTranscriptSummaryValue("—"), null);
+  const summary = { term: "113-1", average: "86.240", attemptedCredits: "3.0", earnedCredits: "3.00", cumulativeCredits: "20.5" };
+  assert.deepEqual(consolidateTranscriptSummaries([summary, { ...summary, average: "86.24", cumulativeCredits: "21.5" }]),
+    [{ ...summary, cumulativeCredits: null }]);
+});
+
+test("checks attempted credits against editable course rows in the same semester", () => {
+  const summary = { term: "113-1", average: null, attemptedCredits: "3.5", earnedCredits: null, cumulativeCredits: null };
+  const rows = groupTranscriptForReview([
+    grade("fall", "113-1", "88.00"), grade("spring", "113-2", "92.00"), grade("other", "112-1", "90"),
+  ]);
+  assert.deepEqual(transcriptCreditCheck(rows, summary), { listed: 2, matches: false });
+  assert.deepEqual(transcriptCreditCheck([editSemesterGrade(rows[0], "1", { credits: 3.5 })], summary), { listed: 3.5, matches: true });
+  assert.equal(transcriptCreditCheck([editSemesterGrade(rows[0], "1", { credits: null })], summary), null);
+});
 
 test("a shared course line keeps both semesters in the academic year printed in the heading", () => {
   const year = resolveTranscriptYearHeader({ academicYear: "111", beginningYear: "111", endingYear: "112" });

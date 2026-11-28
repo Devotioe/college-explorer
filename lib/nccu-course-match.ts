@@ -2,6 +2,7 @@ import courseIndex from "../data/nccu-course-index.json" with { type: "json" };
 import officialCatalog from "../data/nccu-transcript-catalog.json" with { type: "json" };
 import { curricula } from "./curricula";
 import { classifyNccuCourse, isNccuCommerceCoreTitle, normalizeNccuDepartment, preferNccuTranscriptTerm } from "./nccu-study-profile";
+import type { TranscriptRow, TranscriptTitleCorrection } from "./transcript-review";
 
 type IndexCourse = Pick<(typeof courseIndex)[number], "code" | "title" | "titleEn" | "credits" | "department" | "offeredTerms">;
 type OfficialCourse = [code: string, title: string, department: string, credits: number | null, offeredTerms: string[]];
@@ -114,4 +115,68 @@ export function matchNccuCourse(name: string, credits: number | null, term: stri
     }
   }
   return [...candidates.values()].sort((a, b) => b.confidence - a.confidence).slice(0, 5);
+}
+
+export function hasExactNccuCourseTitle(title: string) {
+  return coursesBySearchName.has(normalize(title));
+}
+
+type TitleReading = Pick<TranscriptRow, "id" | "courseName" | "term" | "credits" | "sourceLine">;
+
+function editSimilarity(left: readonly string[], right: readonly string[]) {
+  const distances = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (const [leftIndex, character] of left.entries()) {
+    let diagonal = distances[0];
+    distances[0] = leftIndex + 1;
+    for (let index = 1; index <= right.length; index++) {
+      const above = distances[index];
+      distances[index] = Math.min(above + 1, distances[index - 1] + 1, diagonal + Number(character !== right[index - 1]));
+      diagonal = above;
+    }
+  }
+  return 1 - distances.at(-1)! / Math.max(left.length, right.length);
+}
+
+export function correctNccuTranscriptTitles(rows: readonly TitleReading[], databaseCourses: readonly IndexCourse[]): TranscriptTitleCorrection[] {
+  const byName = new Map(coursesBySearchName);
+  const additional = new Map<string, IndexCourse[]>();
+  for (const course of databaseCourses) {
+    const title = normalize(course.title);
+    const english = normalize(course.titleEn);
+    if (title) addToIndex(additional, title, course);
+    if (english && english !== title) addToIndex(additional, english, course);
+  }
+  for (const [name, courses] of additional) byName.set(name, [...(byName.get(name) ?? []), ...courses]);
+  const toMatch = rows.filter(({ courseName }) => {
+    const name = normalize(courseName);
+    return name && !byName.has(name);
+  });
+  if (!toMatch.length) return [];
+
+  const names = [...byName].map(([name, courses]) => ({ characters: Array.from(name), grams: bigrams(name), courses }));
+  const groups = Map.groupBy(toMatch, ({ id, sourceLine, courseName }) => JSON.stringify([sourceLine ?? id, normalize(courseName)]));
+  return [...groups.values()].flatMap((group) => {
+    const query = normalize(group[0].courseName);
+    const characters = Array.from(query);
+    const letters = new Set(characters);
+    const grams = bigrams(query);
+    let best: { course: IndexCourse; text: number; context: number } | undefined;
+    for (const name of names) {
+      if (!name.characters.some((character) => letters.has(character))) continue;
+      const text = editSimilarity(characters, name.characters) * .85 + similarity(grams, name.grams) * .15;
+      if (text <= 0 || (best && text < best.text)) continue;
+      for (const course of name.courses) {
+        const context = group.reduce((score, row) => score
+          + (course.offeredTerms.includes(row.term) ? 2 : 0)
+          + (row.credits !== null && course.credits === row.credits ? 1 : 0), 0);
+        if (!best || text > best.text || context > best.context) best = { course, text, context };
+      }
+    }
+    if (!best) return [];
+    const { course, text } = best;
+    return group.map(({ id, courseName }) => ({
+      id, courseName: course.title, ocrCourseName: courseName,
+      candidate: { code: course.code, title: course.title, department: course.department, credits: course.credits, confidence: text },
+    }));
+  });
 }

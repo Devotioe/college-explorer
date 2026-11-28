@@ -10,17 +10,27 @@ export type TranscriptCandidate = {
   confidence: number;
 };
 
+export type TranscriptTitleCorrection = {
+  id: string;
+  courseName: string;
+  ocrCourseName: string;
+  candidate: TranscriptCandidate;
+};
+
 export type TranscriptRow = {
   id: string;
   term: string;
   courseCode: string;
   courseName: string;
+  ocrCourseName?: string;
   credits: number | null;
   gradeRaw: string;
   confidence: number;
   candidates?: TranscriptCandidate[];
   recognizedSemester?: Semester;
   sourceLine?: string;
+  scanLine?: number;
+  requiresTitleReview?: true;
   requiresOcrReview?: true;
   ungraded?: true;
 };
@@ -43,12 +53,21 @@ export type TranscriptLibrary = {
 };
 
 export type Semester = "1" | "2" | "3";
+export type TranscriptSemesterSummary = {
+  term: string;
+  average: string | null;
+  attemptedCredits: string | null;
+  earnedCredits: string | null;
+  cumulativeCredits: string | null;
+};
 type Grade = Pick<TranscriptRow, "id" | "courseCode" | "credits" | "gradeRaw" | "confidence" | "candidates" | "requiresOcrReview">;
 
 export type TranscriptReviewRow = {
   id: string;
   year: string;
   courseName: string;
+  ocrCourseName?: string;
+  requiresTitleReview?: true;
   semesters: Partial<Record<Semester, Grade>>;
   unassigned?: Grade & { term: string };
 };
@@ -99,12 +118,41 @@ export function resolveTranscriptYearHeader({ academicYear, beginningYear, endin
   return year;
 }
 
-type SemesterReading = { credits?: number | null; grade?: string; present?: boolean };
+type SemesterReading = { credits?: number | null; grade?: string | null; present?: boolean };
 
-function readSemesterMark(value: string | undefined) {
+export function normalizeTranscriptOcrGrade(value: string | null | undefined) {
   const grade = value?.normalize("NFKC").trim() ?? "";
   if (/^\d{1,3}(?:\.\d{1,2})?$/u.test(grade)) return Number(grade) <= 100 ? grade : "";
   return /^(?:[A-FIPRSUW][+-]?|IP|NP|通過|不通過|抵免|免修|退選|停修|及格|不及格)$/iu.test(grade) ? grade.toUpperCase() : "";
+}
+
+export function normalizeTranscriptSummaryValue(value: string | null) {
+  const printed = value?.normalize("NFKC").trim() ?? "";
+  return /^\d+(?:\.\d+)?$/u.test(printed) ? printed : null;
+}
+
+export function consolidateTranscriptSummaries(summaries: readonly TranscriptSemesterSummary[]) {
+  return [...Map.groupBy(summaries, (summary) => summary.term)].map(([term, readings]) => {
+    const printed = (key: Exclude<keyof TranscriptSemesterSummary, "term">) => {
+      const values = readings.flatMap((reading) => reading[key] ?? []);
+      return values.every((value) => Number(value) === Number(values[0])) ? values[0] ?? null : null;
+    };
+    return { term, average: printed("average"), attemptedCredits: printed("attemptedCredits"),
+      earnedCredits: printed("earnedCredits"), cumulativeCredits: printed("cumulativeCredits") };
+  });
+}
+
+export function transcriptCreditCheck(courses: readonly TranscriptReviewRow[], summary: TranscriptSemesterSummary) {
+  const { year, semester } = splitTerm(summary.term);
+  if (!year || !semester || summary.attemptedCredits === null) return null;
+  const grades = courses.flatMap((row) => {
+    const grade = normalizeTranscriptAcademicYear(row.year) === year ? row.semesters[semester] : undefined;
+    return grade && (grade.gradeRaw.trim() || grade.credits !== null || grade.requiresOcrReview) ? [grade] : [];
+  });
+  const complete = grades.every(({ gradeRaw, credits }) => gradeRaw.trim() && credits !== null);
+  if (!complete) return null;
+  const listed = grades.reduce((sum, { credits }) => sum + (credits ?? 0), 0);
+  return { listed, matches: Math.abs(listed - Number(summary.attemptedCredits)) < 1e-7 };
 }
 
 export function transcriptRowsFromYearLine({ year, earliestYear, courseName, upper, lower, numbered = false }: {
@@ -114,13 +162,13 @@ export function transcriptRowsFromYearLine({ year, earliestYear, courseName, upp
   const rows = ([{ period: "1", reading: upper }, { period: "2", reading: lower }] as const).flatMap<TranscriptRow>(({ period, reading }) => {
     const credits = typeof reading.credits === "number" && Number.isFinite(reading.credits) && reading.credits >= 0 && reading.credits <= 20
       ? reading.credits : null;
-    const gradeRaw = readSemesterMark(reading.grade);
+    const gradeRaw = normalizeTranscriptOcrGrade(reading.grade);
     const onlyDash = /^[\s\p{Pd}−]+$/u.test(reading.grade?.trim() ?? "");
     const present = numbered ? reading.present : (Boolean(gradeRaw) || credits !== null || (reading.present && !onlyDash));
     if (!present) return [];
     return [{ id: `${sourceLine}-${period}`, sourceLine, ...resolveOcrTranscriptPeriod(year, period, earliestYear),
       courseName, courseCode: "", credits, gradeRaw, confidence: courseName && gradeRaw ? .85 : 0,
-      requiresOcrReview: !courseName || !gradeRaw ? true : undefined }];
+      requiresOcrReview: !courseName || !gradeRaw || credits === null ? true : undefined }];
   });
   if (rows.length || !courseName) return rows;
   return [{ id: sourceLine, sourceLine, ...resolveOcrTranscriptPeriod(year, "", earliestYear),
@@ -132,10 +180,20 @@ function courseFamily(code: string) {
   return /^[A-Z0-9]{6}\d{3}$/u.test(key) ? key.slice(0, 6) : key;
 }
 
+export function applyTranscriptTitleCorrections(rows: readonly TranscriptRow[], corrections: readonly TranscriptTitleCorrection[]): TranscriptRow[] {
+  const byId = new Map(corrections.map((correction) => [correction.id, correction]));
+  return rows.map((row) => {
+    const correction = byId.get(row.id);
+    if (!correction || row.courseName !== correction.ocrCourseName) return row;
+    const candidates = [correction.candidate, ...(row.candidates ?? []).filter(({ code }) => code !== correction.candidate.code)];
+    return { ...row, courseName: correction.courseName, ocrCourseName: correction.ocrCourseName, candidates, requiresTitleReview: true };
+  });
+}
+
 export function groupTranscriptForReview(rows: readonly TranscriptRow[]): TranscriptReviewRow[] {
   const groups: TranscriptReviewRow[] = [];
   const byCourse = new Map<string, TranscriptReviewRow[]>();
-  for (const { courseName, term, recognizedSemester, sourceLine, ungraded, ...grade } of rows) {
+  for (const { courseName, ocrCourseName, term, recognizedSemester, sourceLine, requiresTitleReview, ungraded, ...grade } of rows) {
     const parsed = splitTerm(term);
     const { year } = parsed;
     const semester = parsed.semester ?? recognizedSemester;
@@ -149,9 +207,11 @@ export function groupTranscriptForReview(rows: readonly TranscriptRow[]): Transc
     const row = compatible && compatible.length === 1 ? compatible[0] : null;
     if (row && semester) {
       row.semesters[semester] = grade;
+      row.ocrCourseName ??= ocrCourseName;
+      row.requiresTitleReview ||= requiresTitleReview;
       continue;
     }
-    const entry: TranscriptReviewRow = { id: grade.id, year, courseName, semesters: {} };
+    const entry: TranscriptReviewRow = { id: grade.id, year, courseName, ocrCourseName, requiresTitleReview, semesters: {} };
     if (semester) {
       entry.semesters[semester] = grade;
       if (canGroup) byCourse.set(key, [...candidates, entry]);

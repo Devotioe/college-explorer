@@ -5,12 +5,30 @@ import { useEffect, useState } from "react";
 import { nccuRequirementTableUrl } from "../lib/curricula";
 import { classifyNccuCourse, nccuDepartments } from "../lib/nccu-study-profile";
 import {
-  assignTranscriptSemester, confirmedTranscriptRows, editSemesterGrade, groupTranscriptForReview, semesterLabels, transcriptFileNameLimit,
-  type Semester, type TranscriptHistory, type TranscriptLibrary, type TranscriptReviewRow, type TranscriptRow,
+  assignTranscriptSemester, confirmedTranscriptRows, editSemesterGrade, groupTranscriptForReview, semesterLabels, transcriptCreditCheck, transcriptFileNameLimit,
+  type Semester, type TranscriptHistory, type TranscriptLibrary, type TranscriptReviewRow, type TranscriptRow, type TranscriptSemesterSummary,
 } from "../lib/transcript-review";
 
 type Draft = { fileName: string; fileType: string; courses: TranscriptReviewRow[]; warnings: string[]; originalUrl?: string;
-  homeDepartment: string; admissionYear: string };
+  homeDepartment: string; admissionYear: string; summaries: TranscriptSemesterSummary[] };
+
+function SemesterSummaryTable({ draft }: { draft: Draft }) {
+  const entries = draft.summaries.map((summary) => ({ ...summary, check: transcriptCreditCheck(draft.courses, summary) }));
+  const mismatches = entries.filter(({ check }) => check && !check.matches).length;
+  return <details className="transcript-summary">
+    <summary>學期統計與學分核對{mismatches > 0 && <span>（{mismatches} 個學期待核對）</span>}</summary>
+    <div className="transcript-table-wrap">
+      <table className="transcript-table">
+        <thead><tr><th scope="col">學期</th><th scope="col">平均成績</th><th scope="col">修習學分</th>
+          <th scope="col">實得學分</th><th scope="col">累計學分</th><th scope="col">明細核對</th></tr></thead>
+        <tbody>{entries.map(({ term, average, attemptedCredits, earnedCredits, cumulativeCredits, check }) =>
+          <tr key={term}><th scope="row">{term}</th><td>{average ?? "—"}</td><td>{attemptedCredits ?? "—"}</td>
+            <td>{earnedCredits ?? "—"}</td><td>{cumulativeCredits ?? "—"}</td>
+            <td>{!check ? "資料不足" : check.matches ? "學分相符" : `明細加總 ${check.listed}，請對照原檔`}</td></tr>)}</tbody>
+      </table>
+    </div>
+  </details>;
+}
 
 function SemesterField({ row, semester, position, homeDepartment, update }: {
   row: TranscriptReviewRow; semester: Semester; position: number; homeDepartment: string; update: (row: TranscriptReviewRow) => void;
@@ -24,6 +42,7 @@ function SemesterField({ row, semester, position, homeDepartment, update }: {
     <span className="transcript-mobile-label" aria-hidden="true">{label}成績</span>
     <input aria-label={`第 ${position} 列${label}成績`} placeholder={grade?.requiresOcrReview ? "待核對" : "—"} maxLength={20} value={grade?.gradeRaw ?? ""}
       onChange={(event) => update(editSemesterGrade(row, semester, { gradeRaw: event.target.value }))} />
+    {grade?.requiresOcrReview && grade.gradeRaw && <small className="transcript-term-warning">待核對</small>}
     <details className="transcript-grade-details">
       <summary>{label}課號與學分</summary>
       <label>課號
@@ -40,7 +59,7 @@ function SemesterField({ row, semester, position, homeDepartment, update }: {
         <select aria-label={`第 ${position} 列${label}課程建議`} value={grade.candidates.some(({ code }) => code === grade.courseCode) ? grade.courseCode : ""}
           onChange={(event) => {
             const candidate = grade.candidates?.find(({ code }) => code === event.target.value);
-            if (candidate) update(editSemesterGrade({ ...row, courseName: candidate.title }, semester, {
+            if (candidate) update(editSemesterGrade({ ...row, courseName: candidate.title, requiresTitleReview: undefined }, semester, {
               courseCode: candidate.code, confidence: candidate.confidence,
             }));
           }}>
@@ -79,9 +98,10 @@ export function TranscriptDialog({ displayName, close, library, libraryError, on
     if (originalUrl) return () => URL.revokeObjectURL(originalUrl);
   }, [originalUrl]);
 
-  function startReview(rows: TranscriptRow[], fileName: string, fileType: string, source?: File, warnings: string[] = [],
-    homeDepartment = "", admissionYear = "") {
-    setDraft({ fileName, fileType, courses: groupTranscriptForReview(rows), warnings, homeDepartment, admissionYear,
+  function startReview(rows: TranscriptRow[], fileName: string, fileType: string, {
+    source, warnings = [], summaries = [], homeDepartment = "", admissionYear = "",
+  }: Partial<Pick<Draft, "warnings" | "summaries" | "homeDepartment" | "admissionYear">> & { source?: File } = {}) {
+    setDraft({ fileName, fileType, courses: groupTranscriptForReview(rows), warnings, summaries, homeDepartment, admissionYear,
       originalUrl: source && URL.createObjectURL(source) });
     setStatus("");
   }
@@ -100,7 +120,7 @@ export function TranscriptDialog({ displayName, close, library, libraryError, on
       if (!response.ok || !data.transcript) throw new Error(data.error ?? "無法讀取成績單。");
       const { rows, fileName, fileType, homeDepartment, admissionYear } = data.transcript;
       setHistoryMessage("");
-      startReview(rows, fileName, fileType, undefined, [], homeDepartment ?? "", admissionYear ?? "");
+      startReview(rows, fileName, fileType, { homeDepartment: homeDepartment ?? "", admissionYear: admissionYear ?? "" });
     } catch (error) {
       setHistoryMessage(error instanceof Error ? error.message : "無法讀取成績單。");
     } finally {
@@ -133,8 +153,8 @@ export function TranscriptDialog({ displayName, close, library, libraryError, on
     setStatus("正在辨識科目和學期成績…");
     try {
       const { scanTranscript } = await import("../lib/transcript-scan-client");
-      const { rows, warnings } = await scanTranscript(file, setStatus);
-      startReview(rows, file.name, file.type, file, warnings, uploadDepartment);
+      const { rows, warnings, summaries } = await scanTranscript(file, setStatus);
+      startReview(rows, file.name, file.type, { source: file, warnings, summaries, homeDepartment: uploadDepartment });
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "成績單辨識失敗");
     } finally {
@@ -211,6 +231,7 @@ export function TranscriptDialog({ displayName, close, library, libraryError, on
           {originalUrl && pendingYears > 0 && <p className="transcript-year-notice" role="status">有 {pendingYears} 列的學年度待核對，請依原檔補填。</p>}
           {originalUrl && pendingNames > 0 && <p className="transcript-year-notice" role="status">有 {pendingNames} 列的課名待核對，該列讀到的成績與學分已保留。</p>}
           {draft.warnings.map((warning) => <p key={warning} className="transcript-year-notice">{warning}</p>)}
+          {!!draft.summaries.length && <SemesterSummaryTable draft={draft} />}
           <div className="transcript-table-wrap">
             <table className="transcript-table transcript-review-table">
               <thead><tr>
@@ -229,7 +250,10 @@ export function TranscriptDialog({ displayName, close, library, libraryError, on
                   <td className="transcript-review-name">
                     <span className="transcript-mobile-label" aria-hidden="true">科目</span>
                     <input aria-label={`第 ${position} 列科目`} maxLength={160} placeholder={originalUrl ? "課名待核對" : "科目名稱"} value={row.courseName}
-                      onChange={(event) => update({ ...row, courseName: event.target.value })} />
+                      onChange={(event) => update({ ...row, courseName: event.target.value, requiresTitleReview: undefined })} />
+                    {row.ocrCourseName ? <small className="transcript-term-warning">
+                      {row.requiresTitleReview && "課程庫配對，請核對。"}OCR 原文「{row.ocrCourseName}」
+                    </small> : row.requiresTitleReview && row.courseName && <small className="transcript-term-warning">課名待核對</small>}
                   </td>
                   <td><SemesterField row={row} semester="1" position={position} homeDepartment={draft.homeDepartment} update={update} /></td>
                   <td><SemesterField row={row} semester="2" position={position} homeDepartment={draft.homeDepartment} update={update} /></td>

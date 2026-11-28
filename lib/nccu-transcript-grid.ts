@@ -6,10 +6,73 @@ const rulePositions = [39, 195, 262, 329, 481, 548, 614, 767, 833, 900, 1054, 11
 export const gridRowHeight = 14;
 
 export type TranscriptGridSlot = { line: number; upper: boolean; lower: boolean };
-type GridLine = TranscriptGridSlot & { center: number };
+export type TranscriptGridLine = TranscriptGridSlot & { center: number; upperCenter: number; lowerCenter: number };
 export type TranscriptGridColumn = {
-  left: number; right: number; headerTop: number; headerHeight: number; bodyBottom: number; rowHeight: number; lines: GridLine[];
+  left: number; upperLeft: number; lowerLeft: number; right: number;
+  headerTop: number; headerHeight: number; bodyBottom: number; rowHeight: number; lines: TranscriptGridLine[];
 };
+
+export function transcriptGridFields({ left, upperLeft, lowerLeft, right }: TranscriptGridColumn) {
+  return [
+    { field: "titles", left, right: upperLeft },
+    { field: "upper", left: upperLeft, right: lowerLeft },
+    { field: "lower", left: lowerLeft, right },
+  ] as const;
+}
+
+export function transcriptGridCellId(line: number, semester: "upper" | "lower") {
+  return (semester === "upper" ? 100 : 200) + line;
+}
+
+type GridTitleReading = { line: number; courseName: string | null };
+type GridCellReading = { id: number; credits: number | null; grade: string | null };
+
+export function assembleTranscriptGridCells(
+  slots: readonly TranscriptGridSlot[], titles: readonly GridTitleReading[], cells: readonly GridCellReading[],
+) {
+  function unique<T>(values: readonly T[], key: (entry: T) => number) {
+    const byId = new Map<number, T | null>();
+    for (const entry of values) {
+      const id = key(entry);
+      byId.set(id, byId.has(id) ? null : entry);
+    }
+    return byId;
+  }
+  const byLine = unique(titles, (entry) => entry.line);
+  const byCell = unique(cells, (entry) => entry.id);
+  return slots.map((slot) => {
+    const upper = slot.upper ? byCell.get(transcriptGridCellId(slot.line, "upper")) : null;
+    const lower = slot.lower ? byCell.get(transcriptGridCellId(slot.line, "lower")) : null;
+    return {
+      line: slot.line, courseName: byLine.get(slot.line)?.courseName ?? null,
+      upperCredits: upper?.credits ?? null, upperGrade: upper?.grade ?? null,
+      lowerCredits: lower?.credits ?? null, lowerGrade: lower?.grade ?? null,
+    };
+  });
+}
+
+const linesPerOcrBatch = 7;
+
+export function transcriptGridBatches(lines: readonly TranscriptGridLine[], size = linesPerOcrBatch) {
+  return Array.from({ length: Math.ceil(lines.length / size) }, (_, index) => {
+    const start = index * size;
+    const end = start + size;
+    const next = lines[end];
+    return { lines: lines.slice(start, end), continuation: next && !next.upper && !next.lower ? next : undefined };
+  });
+}
+
+export function transcriptGridSummaryBounds(column: TranscriptGridColumn, height: number) {
+  const located = column.bodyBottom < height;
+  const divider = located ? column.bodyBottom : column.headerTop + column.headerHeight + 28 * column.rowHeight;
+  const top = Math.max(0, divider - (located ? 1 : 3) * column.rowHeight);
+  const bottom = Math.min(height, divider + (located ? 6.5 : 8) * column.rowHeight);
+  if (bottom - top < 2 * column.rowHeight) return null;
+  return {
+    left: Math.floor(column.left * 1000 / gridWidth), right: Math.ceil(column.right * 1000 / gridWidth),
+    top: Math.floor(top * 1000 / height), bottom: Math.ceil(bottom * 1000 / height), expectedRows: null,
+  };
+}
 
 export function transcriptBrightnessCurve(gray: Uint8Array): Uint8Array | null {
   const histogram = new Uint32Array(256);
@@ -63,17 +126,21 @@ export function findNccuTranscriptColumns(gray: Uint8Array): { columns: Transcri
   const midtones = gray.reduce((count, value) => count + Number(value >= 125 && value < 220), 0);
   if (midtones > gray.length / 4) {
     const ink = transcriptInkContrast(gray, gridWidth);
+    let fallback: TranscriptGridColumn[] | undefined;
     for (const threshold of [42, 36, 48]) {
       const mask = ink.map((value) => value >= threshold ? 0 : 255);
       const layout = locateNccuTranscriptTable(mask);
       if (!layout || layout.bodyBottom >= gray.length / gridWidth) continue;
+      const numbered = readNccuTranscriptRows(mask, layout);
+      if (numbered) return { columns: numbered, cleaned: true };
       const { rules, headerTop, headerHeight, bodyBottom, scale } = layout;
-      const columns = [0, 3, 6, 9].map((column) => ({
-        left: rules[column], right: rules[column + 3], headerTop, headerHeight, bodyBottom,
+      fallback ??= [0, 3, 6, 9].map((column) => ({
+        left: rules[column], upperLeft: rules[column + 1], lowerLeft: rules[column + 2], right: rules[column + 3],
+        headerTop, headerHeight, bodyBottom,
         rowHeight: gridRowHeight * scale, lines: [],
       }));
-      return { columns, cleaned: true };
     }
+    if (fallback) return { columns: fallback, cleaned: true };
   }
   return { columns: readNccuTranscriptGrid(gray), cleaned: false };
 }
@@ -164,78 +231,132 @@ function locateNccuTranscriptTable(gray: Uint8Array) {
 
 export function readNccuTranscriptGrid(gray: Uint8Array): TranscriptGridColumn[] | null {
   const layout = locateNccuTranscriptTable(gray);
-  if (!layout) return null;
+  return layout ? readNccuTranscriptRows(gray, layout) : null;
+}
+
+function readNccuTranscriptRows(gray: Uint8Array, layout: NonNullable<ReturnType<typeof locateNccuTranscriptTable>>) {
   const { rules, headerTop, headerEnd, headerHeight, bodyBottom, scale } = layout;
   const height = gray.length / gridWidth;
   const at = (x: number, y: number) => gray[y * gridWidth + x];
   const nominalPitch = gridRowHeight * scale;
+  function localHeader(left: number, right: number) {
+    let best = headerEnd;
+    let strength = (right - left - 8) * .3;
+    for (let y = Math.max(4, headerEnd - 7); y <= headerEnd + 7; y++) {
+      let signal = 0;
+      for (let x = left + 4; x < right - 4; x += 2) {
+        if (Math.max(at(x, y - 4), at(x, y + 4)) - at(x, y) > 14) signal++;
+      }
+      const score = signal - .15 * Math.abs(y - headerEnd);
+      if (score <= strength) continue;
+      strength = score;
+      best = y;
+    }
+    return best;
+  }
+  function scanSemester(start: number, end: number, first: number) {
+    const strong = new Uint16Array(height);
+    const credit = new Uint16Array(height);
+    const grade = new Uint16Array(height);
+    const middle = (start + end) / 2;
+    const width = end - start - 10;
+    for (let y = Math.max(4, Math.floor(first - nominalPitch)); y < Math.min(height - 4, bodyBottom - 3, first + nominalPitch * 28); y++) {
+      let dark = 0;
+      let leftInk = 0;
+      let rightInk = 0;
+      let run = 0;
+      let longest = 0;
+      for (let x = start + 5; x < end - 5; x++) {
+        const value = at(x, y);
+        if (value >= 235 || Math.max(at(x, y - 4), at(x, y + 4)) - value <= 16) {
+          run = 0;
+          continue;
+        }
+        longest = Math.max(longest, ++run);
+        if (value < 211) dark++;
+        if (x < middle) leftInk++;
+        else rightInk++;
+      }
+      // A form rule or a highlighter edge can be darker than the text across the entire semester.
+      if (longest >= width * .45 || leftInk + rightInk >= width * .66) continue;
+      strong[y] = dark;
+      credit[y] = leftInk;
+      grade[y] = rightInk;
+    }
+    return { strong, credit, grade };
+  }
+  function alignmentInk(scan: ReturnType<typeof scanSemester>, y: number) {
+    return Math.max(scan.strong[y] ?? 0, 2 * Math.min(scan.credit[y] ?? 0, scan.grade[y] ?? 0));
+  }
   const gradeColumns = Array.from({ length: 4 }, (_, column) => {
     const [left, fall, spring, right] = rules.slice(column * 3, column * 3 + 4);
-    const first = headerEnd + (9 - column * .8) * scale;
-    const upper = new Uint16Array(height);
-    const lower = new Uint16Array(height);
-    for (let y = headerEnd + 3; y < Math.min(height - 4, bodyBottom - 3, headerEnd + nominalPitch * 30); y++) {
-      for (const [start, end, ink] of [[fall, spring, upper], [spring, right, lower]] as const) {
-        for (let x = start + 5; x < end - 5; x++) {
-          const value = at(x, y);
-          if (value < 211 && Math.max(at(x, y - 4), at(x, y + 4)) - value > 15) ink[y]++;
-        }
-      }
+    const columnHeader = localHeader(left, fall);
+    const first = columnHeader + 9 * scale;
+    const upperOffset = localHeader(fall, spring) - columnHeader;
+    const lowerOffset = localHeader(spring, right) - columnHeader;
+    const upper = scanSemester(fall, spring, first);
+    const lower = scanSemester(spring, right, first);
+    const evidence = [];
+    for (let y = Math.max(4, Math.floor(first - nominalPitch / 2)); y < Math.min(height - 4, first + nominalPitch * 26); y++) {
+      const ink = Math.min(20, Math.max(0, alignmentInk(upper, y + upperOffset) + alignmentInk(lower, y + lowerOffset) - 4));
+      if (ink) evidence.push({ position: y - first, ink });
     }
-    return { left, right, first, upper, lower };
+    return { left, upperLeft: fall, lowerLeft: spring, right, columnHeader, first, upperOffset, lowerOffset, upper, lower, evidence };
   });
 
-  // Repeated grade strokes reveal vertical spacing independently of horizontal scaling.
-  const evidence = gradeColumns.flatMap(({ first, upper, lower }) => {
-    const points = [];
-    for (let y = headerEnd + 3; y < Math.min(height - 4, first + nominalPitch * 27); y++) {
-      const ink = Math.min(20, Math.max(0, upper[y] + lower[y] - 4));
-      if (ink) points.push({ position: y - first, ink });
-    }
-    return points;
-  });
-  let rowHeight = nominalPitch;
-  let rowShift = 0;
-  if (evidence.some(({ position }) => position >= nominalPitch * 5)) {
+  // Fit a common row spacing for sparse columns, then calibrate each populated column against its own strokes.
+  function fitRows(evidence: (typeof gradeColumns)[number]["evidence"], initialPitch: number, limit: number, phaseLimit: number) {
     const totalInk = evidence.reduce((sum, { ink }) => sum + ink, 0);
-    let best = 0;
-    for (let step = -16; step <= 16; step++) {
-      const pitch = nominalPitch + step * .125;
-      for (let shift = -2; shift <= 2; shift += .5) {
+    let result = { rowHeight: initialPitch, rowShift: 0, score: 0 };
+    if (!totalInk) return result;
+    const pitchSteps = evidence.some(({ position }) => position >= initialPitch * 5) ? limit : 0;
+    for (let step = -pitchSteps; step <= pitchSteps; step++) {
+      const pitch = initialPitch + step * .125;
+      for (let shift = -phaseLimit; shift <= phaseLimit; shift += .5) {
         const alignment = evidence.reduce((sum, { position, ink }) =>
           sum + ink * Math.cos(2 * Math.PI * (position - shift) / pitch), 0) / totalInk;
-        // Prefer the printed form's nominal spacing when the ink fits equally well.
         const score = alignment - Math.abs(step) * .001 - Math.abs(shift) * .01;
-        if (score <= best) continue;
-        best = score;
-        rowHeight = pitch;
-        rowShift = shift;
+        if (score > result.score) result = { rowHeight: pitch, rowShift: shift, score };
       }
     }
-    if (best < .16) return null;
+    return result;
   }
+  const common = fitRows(gradeColumns.flatMap(({ evidence }) => evidence), nominalPitch, 16, 2);
+  const commonPitch = common.score >= .16 ? common.rowHeight : nominalPitch;
 
-  function hasSemesterValue(inkByLine: Uint16Array, center: number) {
-    const scan = inkByLine.subarray(Math.max(0, center - 5), center + 6);
-    // Empty grades and credits are printed as dashes, with at most a few scanlines of ink.
-    return scan.filter((ink) => ink >= 2).length >= 5 && scan.reduce((sum, ink) => sum + ink, 0) >= 30;
+  function hasSemesterValue(semester: ReturnType<typeof scanSemester>, center: number) {
+    function hasStrokes(inkByLine: Uint16Array, minimumInk: number) {
+      const scan = inkByLine.subarray(Math.max(0, center - 5), center + 6);
+      return scan.filter((ink) => ink >= 2).length >= 5 && scan.reduce((sum, ink) => sum + ink, 0) >= minimumInk;
+    }
+    // Faint numbers should have separate credit and grade strokes. A lone pale mark may be a watermark.
+    return hasStrokes(semester.strong, 30) || (hasStrokes(semester.credit, 18) && hasStrokes(semester.grade, 24));
   }
 
   const columns = [];
   let topCount = 0;
   let bottomCount = 0;
-  for (const { left, right, first, upper, lower } of gradeColumns) {
+  for (const { left, upperLeft, lowerLeft, right, columnHeader, first, upperOffset, lowerOffset, upper, lower, evidence } of gradeColumns) {
+    const local = fitRows(evidence, commonPitch, 12, 4);
+    const { rowHeight, rowShift } = local.score >= .16 ? local : { rowHeight: commonPitch, rowShift: 0 };
     const firstCenter = first + rowShift;
-    const lineCount = Math.min(26, Math.floor((Math.min(height - 10, bodyBottom - 6) - firstCenter) / rowHeight) + 1);
+    const lastCenter = Math.min(height - 10, bodyBottom - 6) - Math.max(0, upperOffset, lowerOffset);
+    const lineCount = Math.min(26, Math.floor((lastCenter - firstCenter) / rowHeight) + 1);
     const lines = Array.from({ length: lineCount }, (_, index) => {
       const center = Math.round(firstCenter + index * rowHeight);
-      return { line: index + 1, center, upper: hasSemesterValue(upper, center), lower: hasSemesterValue(lower, center) };
+      const upperCenter = center + upperOffset;
+      const lowerCenter = center + lowerOffset;
+      return { line: index + 1, center, upperCenter, lowerCenter,
+        upper: hasSemesterValue(upper, upperCenter), lower: hasSemesterValue(lower, lowerCenter) };
     });
     const active = lines.filter(({ upper, lower }) => upper || lower);
     topCount += active.filter(({ line }) => line <= 12).length;
     bottomCount += active.filter(({ line }) => line >= 22).length;
     // Include the next printed line for a wrapped course name or a visible end-of-list marker.
-    columns.push({ left, right, headerTop, headerHeight, bodyBottom, rowHeight, lines: lines.slice(0, (active.at(-1)?.line ?? 0) + 1) });
+    const localHeaderTop = Math.max(0, headerTop + columnHeader - headerEnd);
+    columns.push({ left, upperLeft, lowerLeft, right, headerTop: localHeaderTop,
+      headerHeight: Math.min(headerHeight, columnHeader + 1), bodyBottom, rowHeight,
+      lines: lines.slice(0, (active.at(-1)?.line ?? 0) + 1) });
   }
   // An upright copy of this form starts listing courses immediately after its headers.
   if (topCount < 10 || topCount < bottomCount * 3) return null;

@@ -234,6 +234,11 @@ html[data-theme="dark"] .map-canvas { background: #1f1f29 !important; }
 .transcript-context-field input, .transcript-context-field select { max-width: 100%; border: 1px solid var(--border); border-radius: 7px; background: var(--surface); padding: .3rem .45rem; }
 .transcript-context-field input { width: 6rem; }
 .transcript-year-notice { padding: 0 1.5rem .75rem; color: var(--foreground); font-size: .85rem; }
+.transcript-summary { margin: 0 1.5rem .9rem; font-size: .85rem; }
+.transcript-summary summary { cursor: pointer; }
+.transcript-summary summary span { color: var(--destructive); }
+.transcript-summary .transcript-table-wrap { margin: .5rem 0 0; }
+.transcript-summary .transcript-table { min-width: 580px; }
 .transcript-review-table { min-width: 0; table-layout: fixed; }
 .transcript-review-table th { font-size: .875rem; }
 .transcript-review-table th:first-child { width: 7rem; }

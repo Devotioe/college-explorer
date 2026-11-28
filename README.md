@@ -59,12 +59,15 @@
 
 ## Local development
 
-需求：Node.js `>=22.13.0`。
+需求：Node.js `>=22.13.0`。本機成績單影像前處理另需 Python 3 與 OpenCV。
 
 ```bash
 npm run install:ci
+python -m pip install -r requirements-ocr.txt
 npm run dev
 ```
+
+本機開發伺服器使用 Python／OpenCV 校正影像方向、傾斜和對比，並定位學年度欄位與成績列。系統有多套 Python 時，可用 `COURSE_COMPASS_PYTHON` 指定已安裝 OpenCV 的 Python 執行檔。PDF 仍由瀏覽器逐頁轉成影像後交給本機前處理。
 
 開發伺服器預設使用 `http://127.0.0.1:5173`。地圖優先使用網站 Email 帳號的工作階段。以 ChatGPT 身分保存的舊地圖，在只使用原身分登入時仍可存取。本機可開啟以下路徑模擬舊有的 ChatGPT 登入：
 

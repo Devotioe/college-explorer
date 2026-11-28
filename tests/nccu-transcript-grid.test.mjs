@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { findNccuTranscriptColumns, gridHeight, gridWidth, readNccuTranscriptGrid, transcriptBrightnessCurve, transcriptInkContrast } from "../lib/nccu-transcript-grid.ts";
+import { assembleTranscriptGridCells, findNccuTranscriptColumns, gridHeight, gridWidth, readNccuTranscriptGrid, transcriptBrightnessCurve, transcriptGridBatches, transcriptGridFields, transcriptGridSummaryBounds, transcriptInkContrast } from "../lib/nccu-transcript-grid.ts";
 
 function gridFixture(pitch = 14, rowCount = 4, hasLower = (line) => line === 1) {
   const gray = new Uint8Array(gridWidth * gridHeight).fill(252);
@@ -50,6 +50,55 @@ test("recognizes the upright NCCU four-year form and distinguishes printed marks
   assert.equal(readNccuTranscriptGrid(new Uint8Array(gridWidth * gridHeight).fill(255)), null);
 });
 
+test("preserves physical row numbers and shows wrapped title context at a batch seam", () => {
+  const lines = Array.from({ length: 17 }, (_, index) => ({
+    line: index + 1, center: 210 + index * 14, upper: index !== 7, lower: false,
+  }));
+  const batches = transcriptGridBatches(lines);
+  assert.deepEqual(batches.map(({ lines }) => lines.length), [7, 7, 3]);
+  assert.deepEqual(batches.flatMap((batch) => batch.lines), lines);
+  assert.equal(batches[0].continuation?.line, 8);
+  assert.equal(batches[1].continuation, undefined);
+  assert.deepEqual(transcriptGridBatches(batches[0].lines, 3).map((batch) => batch.lines.map(({ line }) => line)),
+    [[1, 2, 3], [4, 5, 6], [7]]);
+});
+
+test("includes rows below the form divider even if the scan's divider cannot be located", () => {
+  const [column] = readNccuTranscriptGrid(gridFixture());
+  for (const bodyBottom of [gridHeight, 601]) {
+    const bounds = transcriptGridSummaryBounds({ ...column, bodyBottom }, gridHeight);
+    assert.ok(bounds.top * gridHeight / 1000 < 601);
+    assert.ok(bounds.bottom * gridHeight / 1000 > 670);
+    assert.ok(bounds.right < 300);
+  }
+});
+
+test("reads names and each semester from adjacent, non-overlapping physical columns", () => {
+  const [column] = readNccuTranscriptGrid(gridFixture());
+  assert.deepEqual(transcriptGridFields(column), [
+    { field: "titles", left: 39, right: 195 },
+    { field: "upper", left: 195, right: 262 },
+    { field: "lower", left: 262, right: 329 },
+  ]);
+});
+
+test("binds a score to its printed cell id even when the model reorders readings", () => {
+  const rows = assembleTranscriptGridCells([
+    { line: 8, upper: true, lower: false },
+    { line: 9, upper: true, lower: true },
+  ], [{ line: 8, courseName: "統計學（一）" }, { line: 9, courseName: "統計學（二）" }], [
+    { id: 209, credits: 3, grade: "95.00" },
+    { id: 208, credits: 3, grade: "89.00" },
+    { id: 108, credits: 3, grade: "89.00" },
+    { id: 109, credits: 3, grade: "77.50" },
+    { id: 109, credits: 3, grade: "79.50" },
+  ]);
+  assert.deepEqual(rows, [
+    { line: 8, courseName: "統計學（一）", upperCredits: 3, upperGrade: "89.00", lowerCredits: null, lowerGrade: null },
+    { line: 9, courseName: "統計學（二）", upperCredits: null, upperGrade: null, lowerCredits: 3, lowerGrade: "95.00" },
+  ]);
+});
+
 test("uses the printed row spacing when the same form is stretched vertically", () => {
   const hasLower = (line) => line % 3 === 1;
   const expected = Array.from({ length: 12 }, (_, line) => [true, hasLower(line)]);
@@ -60,6 +109,47 @@ test("uses the printed row spacing when the same form is stretched vertically", 
     for (const { lines } of columns) {
       assert.deepEqual(lines.slice(0, expected.length).map(({ upper, lower }) => [upper, lower]), expected, `pitch ${pitch}`);
     }
+  }
+});
+
+test("recovers faint marks and independently calibrated rows in the rightmost years", () => {
+  const gray = gridFixture(14, 0);
+  const rules = [39, 195, 262, 329, 481, 548, 614, 767, 833, 900, 1054, 1121, 1191];
+  const years = [
+    { first: 216, pitch: 14, ink: 126, delta: 0 },
+    { first: 216, pitch: 14, ink: 126, delta: 0 },
+    { first: 217, pitch: 14.7, ink: 222, delta: 2 },
+    { first: 215, pitch: 13.2, ink: 226, delta: -3 },
+  ];
+  for (const [index, { first, pitch, ink, delta }] of years.entries()) {
+    const lower = rules[index * 3 + 2];
+    const right = rules[index * 3 + 3];
+    if (delta) {
+      gray.fill(252, 207 * gridWidth + lower + 1, 207 * gridWidth + right);
+      gray.fill(180, (207 + delta) * gridWidth + lower + 1, (207 + delta) * gridWidth + right);
+    }
+    for (let row = 0; row < 12; row++) {
+      const center = Math.round(first + row * pitch);
+      for (const [left, y, active] of [[rules[index * 3 + 1], center, row % 3 !== 2], [lower, center + delta, row % 3 !== 0]]) {
+        for (let dy = active ? -4 : 0; dy <= (active ? 4 : 0); dy++) {
+          const start = (y + dy) * gridWidth + left + 18;
+          gray.fill(ink, start, start + 9);
+          gray.fill(ink, start + 25, start + 33);
+        }
+      }
+    }
+  }
+  for (let y = 485; y < 493; y++) gray.fill(180, y * gridWidth + 1058, y * gridWidth + 1190);
+  for (let y = 483; y < 492; y++) gray.fill(226, y * gridWidth + 847, y * gridWidth + 857);
+  const columns = readNccuTranscriptGrid(gray);
+  assert.equal(columns?.length, 4);
+  const expected = Array.from({ length: 12 }, (_, row) => [row % 3 !== 2, row % 3 !== 0]);
+  for (const [index, column] of columns.entries()) {
+    const { pitch, delta } = years[index];
+    assert.ok(Math.abs(column.rowHeight - pitch) <= .25, `year ${index + 1} pitch`);
+    assert.deepEqual(column.lines.slice(0, 12).map(({ upper, lower }) => [upper, lower]), expected, `year ${index + 1} marks`);
+    assert.equal(column.lines.length, 13);
+    assert.equal(column.lines[0].lowerCenter - column.lines[0].upperCenter, delta);
   }
 });
 
@@ -83,7 +173,7 @@ test("keeps the same year and semester grid after removing the personal-informat
   assert.equal(readNccuTranscriptGrid(cropped.reverse()), null);
 });
 
-test("uses the original year columns on gray scans with bright watermarks and a footer", () => {
+test("locates both semester marks by row on gray scans with bright watermarks and a footer", () => {
   const fixture = gridFixture();
   const gray = fixture.map((pixel, index) => {
     if (pixel !== 252) return 75;
@@ -100,5 +190,6 @@ test("uses the original year columns on gray scans with bright watermarks and a 
   assert.equal(cleaned, true);
   assert.equal(columns?.length, 4);
   assert.ok(columns.every(({ bodyBottom }) => bodyBottom >= 446 && bodyBottom <= 450));
-  assert.ok(columns.every(({ lines }) => lines.length === 0));
+  const semesterMarks = (pageColumns) => pageColumns.map(({ lines }) => lines.map(({ upper, lower }) => [upper, lower]));
+  assert.deepEqual(semesterMarks(columns), semesterMarks(readNccuTranscriptGrid(fixture)));
 });

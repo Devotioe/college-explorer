@@ -2,10 +2,10 @@ import { env } from "cloudflare:workers";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getCurrentPasswordUser } from "../../../../lib/password-auth";
-import { matchNccuCourse } from "../../../../lib/nccu-course-match";
-import { normalizeTranscriptAcademicYear, resolveOcrTranscriptPeriod, resolveTranscriptYearHeader, transcriptRowsFromYearLine, type TranscriptRow } from "../../../../lib/transcript-review";
+import { hasExactNccuCourseTitle, matchNccuCourse } from "../../../../lib/nccu-course-match";
+import { normalizeTranscriptAcademicYear, normalizeTranscriptOcrGrade, normalizeTranscriptSummaryValue, resolveOcrTranscriptPeriod, resolveTranscriptYearHeader, transcriptRowsFromYearLine, type TranscriptSemesterSummary } from "../../../../lib/transcript-review";
 import { isTranscriptGradeDash, isTranscriptPageText, transcriptScanRotations } from "../../../../lib/transcript-scan-layout";
-import type { TranscriptGridSlot } from "../../../../lib/nccu-transcript-grid";
+import { assembleTranscriptGridCells, transcriptGridCellId, type TranscriptGridSlot } from "../../../../lib/nccu-transcript-grid";
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const ALLOWED_TYPES = new Set(["application/pdf", "image/jpeg", "image/png", "image/webp"]);
@@ -48,7 +48,7 @@ const layoutResult = z.object({
 
 const layoutInstructions = [
   "四張圖為同一頁的四個方向。即使檔案已裁去頁首，仍以可順讀的學年度、第一學期、第二學期、科目、學分和成績等表頭判斷方向，填入該圖標記的旋轉角度。無法確認時填 orientationConfirmed=false、rotation=0、columns=[]。",
-  "只在選定的圖上定位橫向並排的課程表區塊，依左至右排列。每區包含整組課名欄、相鄰學分與成績欄、區內所有學年度和學期表頭。上下排列且共用同一組欄位的課表一起保留。不可把一組課表中的課名、學分、成績分成不同區塊。邊界應涵蓋完整字行，避免頁首個資。座標以該張圖左上為 (0,0)、右下為 (1000,1000)，不含其他圖。找不到清楚的課表界線時回傳空的 columns。",
+  "只在選定的圖上定位橫向並排的課程表區塊，依左至右排列。每區包含整組課名欄、相鄰學分與成績欄、區內所有學年度和學期表頭，以及緊接在該區下方的學期統計。上下排列且共用同一組欄位的課表一起保留。不可把一組課表中的課名、學分、成績分成不同區塊。邊界應涵蓋完整字行，避免頁首個資。座標以該張圖左上為 (0,0)、右下為 (1000,1000)，不含其他圖。找不到清楚的課表界線時回傳空的 columns。",
   "一個學年度標題下面有共用的科目欄，以及右側第一學期、第二學期兩組學分和成績欄時，要把標題與所有這些欄合為一個區塊，設 annual=true。即使整張圖只有這一個學年度也一樣。括號內的起迄日期不構成另一個學年度。區內多個學年度或左右學期各有獨立科目欄時，設 annual=false。",
   "逐區估計可見的學期成績筆數 expectedRows。要算模糊但看得出對應學分或成績的課程列，同一課名若兩學期都印有資料則算兩筆。忽略表頭、空白和統計列。一個課名分行印出仍只算該學期一筆。無法可靠估計時填 null。只回傳方向與版面，勿抄錄任何個資或課程內容。",
 ].join("\n");
@@ -77,61 +77,96 @@ const courseSchema = schemaObject({
 });
 
 const gridSlots = z.array(z.object({ line: z.number().int().min(1).max(26), upper: z.boolean(), lower: z.boolean() })).min(1).max(26)
-  .refine((slots) => slots.every(({ line }, index) => line === index + 1));
-const yearHeading = { academicYear: z.string(), beginningYear: z.string(), endingYear: z.string(), transcriptVisible: z.boolean() };
+  .refine((slots) => slots.every(({ line }, index) => line === slots[0].line + index));
+const academicYearHeading = { academicYear: z.string(), beginningYear: z.string(), endingYear: z.string() };
+const yearHeading = { ...academicYearHeading, transcriptVisible: z.boolean() };
+const semesterSummary = z.object({
+  average: z.string().nullable(), attemptedCredits: z.string().nullable(),
+  earnedCredits: z.string().nullable(), cumulativeCredits: z.string().nullable(),
+});
+const summaryReading = z.object({ upper: semesterSummary, lower: semesterSummary });
 const yearLine = {
-  courseName: z.string(), upperCredits: z.number().nullable(), upperGrade: z.string(),
-  lowerCredits: z.number().nullable(), lowerGrade: z.string(),
+  courseName: z.string().nullable(), upperCredits: z.number().nullable(), upperGrade: z.string().nullable(),
+  lowerCredits: z.number().nullable(), lowerGrade: z.string().nullable(),
 };
 const gridReading = z.object({
   ...yearHeading,
   courses: z.array(z.object({ line: z.number().int(), ...yearLine })),
+  summaries: summaryReading.optional(),
+});
+const isolatedGridReading = z.object({
+  ...academicYearHeading,
+  titles: z.array(z.object({ line: z.number().int(), courseName: z.string().nullable() })),
+  cells: z.array(z.object({ id: z.number().int(), credits: z.number().nullable(), grade: z.string().nullable() })),
+  summaries: summaryReading.optional(),
 });
 const intactReading = z.object({
   ...yearHeading,
   courses: z.array(z.object({ ...yearLine, upperPresent: z.boolean(), lowerPresent: z.boolean() })),
+  summaries: summaryReading,
 });
-const yearHeadingSchema = {
-  academicYear: { type: "string" }, beginningYear: { type: "string" }, endingYear: { type: "string" }, transcriptVisible: { type: "boolean" },
-};
+const academicYearHeadingSchema = { academicYear: { type: "string" }, beginningYear: { type: "string" }, endingYear: { type: "string" } };
+const yearHeadingSchema = { ...academicYearHeadingSchema, transcriptVisible: { type: "boolean" } };
 const yearLineSchema = {
-  courseName: { type: "string" },
-  upperCredits: { type: ["number", "null"] }, upperGrade: { type: "string" },
-  lowerCredits: { type: ["number", "null"] }, lowerGrade: { type: "string" },
+  courseName: { type: ["string", "null"] },
+  upperCredits: { type: ["number", "null"] }, upperGrade: { type: ["string", "null"] },
+  lowerCredits: { type: ["number", "null"] }, lowerGrade: { type: ["string", "null"] },
 };
-const gridSchema = schemaObject({
+const summaryNumber = { type: ["string", "null"] };
+const semesterSummarySchema = schemaObject({
+  average: summaryNumber, attemptedCredits: summaryNumber, earnedCredits: summaryNumber, cumulativeCredits: summaryNumber,
+});
+const summarySchema = schemaObject({ upper: semesterSummarySchema, lower: semesterSummarySchema });
+const gridProperties = {
   ...yearHeadingSchema,
   courses: { type: "array", items: schemaObject({
     line: { type: "integer" }, ...yearLineSchema,
   }) },
-});
+};
+const gridSchema = schemaObject(gridProperties);
+const gridWithSummarySchema = schemaObject({ ...gridProperties, summaries: summarySchema });
+const isolatedGridProperties = {
+  ...academicYearHeadingSchema,
+  titles: { type: "array", items: schemaObject({ line: { type: "integer" }, courseName: { type: ["string", "null"] } }) },
+  cells: { type: "array", items: schemaObject({
+    id: { type: "integer" }, credits: { type: ["number", "null"] }, grade: { type: ["string", "null"] },
+  }) },
+};
 const intactSchema = schemaObject({
   ...yearHeadingSchema,
   courses: { type: "array", items: schemaObject({
     ...yearLineSchema, upperPresent: { type: "boolean" }, lowerPresent: { type: "boolean" },
   }) },
+  summaries: summarySchema,
 });
 const yearHeadingInstructions = "這是國立政治大學掃描成績單的一個學年度欄。academicYear 只抄最上方「學年度」正前方的年。beginningYear 和 endingYear 分別抄同一行括號內起始年和結束年。括號內日期不分配給學期。依各位置原文抄錄，看不清楚就留空。";
+const summaryInstructions = "在 summaries 內，按統計區原印刷位置分開第一學期 upper、第二學期 lower。average 抄學期平均成績，attemptedCredits 抄修習學分，earnedCredits 抄實得學分，cumulativeCredits 抄學分累計。逐字保留小數位，例如 22.0 與 86.24，用字串回傳。不要計算或取用累計平均成績。空白、橫線、模糊或沒有印刷的欄位填 null。";
 const intactInstructions = [
   transcriptEvidence,
   yearHeadingInstructions,
   "由上到下逐列抄錄，每個實際橫列在 courses 只輸出一筆。左側是唯一的科目欄，中間一組學分和成績屬於第一學期（upper），最右一組屬於第二學期（lower）。同一橫列兩組都有資料時，填入同一筆的 upper 和 lower 欄位，共用一個課名。若只有最右一組有資料，只填 lower，不能移到 upper。",
   "有印學分或成績時將該組 present 設為 true。該組只有空白或橫線時設為 false，學分填 null，成績留空。W、IP、P 與等第是成績，照印刷原樣保留。不要跨列取值，成績看不清楚就留空。",
   "兩邊都沒有學分或成績的續行只接回上一個課名。只看得到空白、橫線或背景字的行，不另列成一門課。",
-  "逐字抄讀水平印刷的課名，跨行的課名接回原橫列。看不清楚的課名留空。略過［以下空白］、統計、校名、背景圖案與重複的 NATIONAL CHENGCHI UNIVERSITY 浮水印片段。只抄原圖中的課程，不猜測或以常見課名替換。不要輸出任何學生個資。",
+  "逐字抄讀水平印刷的課名，跨行的課名接回原橫列。看不清楚的課名或成績填 null。［以下空白］、統計、校名、背景圖案與重複的 NATIONAL CHENGCHI UNIVERSITY 浮水印片段不可當作課名。只抄原圖中的課程，不猜測或以常見課名替換。不要輸出任何學生個資。",
+  summaryInstructions,
 ].join("\n");
 const gridInstructions = [
   transcriptEvidence,
   yearHeadingInstructions,
   "所有橫列左側加了藍色序號。逐一依序號抄讀。只有一欄科目，右邊第一組學分與成績屬於上學期，第二組屬於下學期。保留括號、數字、等第、W、P、抵免等原內容。分隔用的短橫線代表無資料，勿填數值。",
-  "序號對應每條印刷行。給定序號的兩個已定位成績格只讀該行，不跨行找分數。可能有一個科目名稱印成兩行，把下一行的接續文字接回原課名，接續行不另輸出。沒有成績的獨立課名仍可抄其名稱。略過［以下空白］、統計及空白。每個序號至多回傳一次，讀不清楚的欄位留空，不要猜常見課名。",
-  "斜向重複的 NATIONAL CHENGCHI UNIVERSITY 是背景浮水印。遇到校名、浮水印或裁切後剩下的片段，忽略背景文字，只抄水平印刷的課程資料。",
+  "只輸出下方清單列出的序號，序號從清單第一個數字開始。逐一對照每個序號右側的科目欄抄下完整原文，包括末尾的一、二、甲、乙，以及括號內的文字。兩個已定位成績格只讀該行，不跨行找分數。若課名在下一行接續，將文字接回原科目，接續行不另輸出。未編號的最後一行只能當作課名接續。略過［以下空白］、統計及空白。每個序號至多回傳一次，讀不清楚的欄位留空，不要猜常見課名。",
+  "無法辨識的課名、學分、成績填 null。斜向重複的 NATIONAL CHENGCHI UNIVERSITY 是背景浮水印。忽略背景文字，只抄水平印刷的課程資料。",
+].join("\n");
+const isolatedGridInstructions = [
+  yearHeadingInstructions,
+  "第一張圖只用來讀學年度與課名。逐一抄錄藍色二位數列號右側的科目名稱到 titles。保留順序、括號、級別與字尾。無編號的最後一行若是接續文字，接回原課名。只抄能看清的整個名稱，模糊填 null。忽略背景浮水印、校名與統計。這些圖片是同一張表的局部裁圖，各裁圖獨立轉錄。一張裁圖讀不到內容時，仍須轉錄其他裁圖。",
+  "其餘標有三位數藍色號碼的圖片是獨立裁切的學分與成績格。每個藍色號碼是該格的 id，沿同一橫列在黑色印刷文字讀左邊學分與右邊成績。成績以字串逐字保留，包括小數位或 W、IP、P 等。藍色號碼不作為成績。只回傳圖片指定的 id，空白、橫線或讀不清楚的值填 null。不要從其他圖片移用數字。",
 ].join("\n");
 
 type YearLine = z.infer<typeof gridReading>["courses"][number] | z.infer<typeof intactReading>["courses"][number];
 
 function mapYearLine(year: string, earliestYear: string, entry: YearLine | undefined, slot?: TranscriptGridSlot) {
-  const courseName = entry?.courseName.trim() ?? "";
+  const courseName = entry?.courseName?.trim() ?? "";
   const printed = entry && "upperPresent" in entry ? entry : undefined;
   return transcriptRowsFromYearLine({
     year, earliestYear, courseName, numbered: Boolean(slot),
@@ -142,20 +177,34 @@ function mapYearLine(year: string, earliestYear: string, entry: YearLine | undef
   });
 }
 
-function mapGridRows(result: z.infer<typeof gridReading>, slots: TranscriptGridSlot[], earliestYear: string) {
+function mapYearSummaries(year: string, reading: z.infer<typeof summaryReading> | undefined): TranscriptSemesterSummary[] {
+  if (!year || !reading) return [];
+  return ([["1", reading.upper], ["2", reading.lower]] as const).flatMap(([semester, entry]) => {
+    const values = {
+      average: normalizeTranscriptSummaryValue(entry.average),
+      attemptedCredits: normalizeTranscriptSummaryValue(entry.attemptedCredits),
+      earnedCredits: normalizeTranscriptSummaryValue(entry.earnedCredits),
+      cumulativeCredits: normalizeTranscriptSummaryValue(entry.cumulativeCredits),
+    };
+    return Object.values(values).some((value) => value !== null) ? [{ term: `${year}-${semester}`, ...values }] : [];
+  });
+}
+
+function mapGridRows(result: Omit<z.infer<typeof gridReading>, "transcriptVisible">, slots: TranscriptGridSlot[], earliestYear: string) {
   const year = resolveTranscriptYearHeader(result);
-  const pageText = new Set(result.courses.filter(({ courseName }) => isTranscriptPageText(courseName)));
-  const discardedLines = new Set([...pageText].map(({ line }) => line));
+  const pageText = new Set(result.courses.filter(({ courseName }) => courseName && isTranscriptPageText(courseName)));
   const courses = result.courses.filter((course) => !pageText.has(course));
   const counts = new Map<number, number>();
   for (const { line } of courses) counts.set(line, (counts.get(line) ?? 0) + 1);
   const byLine = new Map(courses.filter(({ line }) => counts.get(line) === 1).map((course) => [course.line, course]));
-  const rows = slots.flatMap<TranscriptRow>((slot) => {
+  const rows = slots.flatMap((slot) => {
     const entry = byLine.get(slot.line);
-    if (!entry && discardedLines.has(slot.line)) return [];
-    return mapYearLine(year, earliestYear, entry, slot);
+    const requiresTitleReview = !entry?.courseName?.trim() || !hasExactNccuCourseTitle(entry.courseName);
+    return mapYearLine(year, earliestYear, entry, slot).map((row) => ({
+      ...row, scanLine: slot.line, requiresTitleReview: requiresTitleReview ? true : undefined,
+    }));
   });
-  return { rows, discardedPageText: pageText.size };
+  return { rows, discardedPageText: pageText.size, summaries: mapYearSummaries(year, result.summaries) };
 }
 
 function arrayBufferToBase64(buffer: ArrayBuffer) {
@@ -250,22 +299,59 @@ export async function POST(request: Request) {
   const earliestYear = typeof earliestYearInput === "string" ? normalizeTranscriptAcademicYear(earliestYearInput) : "";
   if (earliestYearInput && !earliestYear) return NextResponse.json({ error: "請輸入有效的最早學年度，例如 110。" }, { status: 400 });
   const mode = form.get("mode");
-  if (mode === "grid") {
+  if (mode === "grid" || mode === "grid-cells") {
     let slots: unknown;
     try { slots = JSON.parse(String(form.get("slots"))); } catch { slots = null; }
     const parsedSlots = gridSlots.safeParse(slots);
     if (file.type !== "image/jpeg" || !parsedSlots.success) {
       return NextResponse.json({ error: "無法讀取成績單的列位置" }, { status: 400 });
     }
+    const footer = form.get("footer");
+    if (footer !== null && (!(footer instanceof File) || footer.type !== "image/jpeg" || footer.size > MAX_FILE_BYTES)) {
+      return NextResponse.json({ error: "無法讀取成績單的學期統計影像" }, { status: 400 });
+    }
+    const footerContent = footer ? [
+      { type: "input_text", text: `下一張圖是同一學年度的底部統計區。不要從這張圖新增課程。\n${summaryInstructions}` },
+      await ocrFileContent(footer),
+    ] : [];
+    if (mode === "grid-cells") {
+      const cellContent: Record<string, unknown>[] = [];
+      for (const semester of ["upper", "lower"] as const) {
+        const expected = parsedSlots.data.filter((slot) => slot[semester]).map(({ line }) => transcriptGridCellId(line, semester));
+        if (!expected.length) continue;
+        const image = form.get(semester);
+        if (!(image instanceof File) || image.type !== "image/jpeg" || !image.size || image.size > MAX_FILE_BYTES) {
+          return NextResponse.json({ error: "無法讀取學期成績的裁切影像" }, { status: 400 });
+        }
+        cellContent.push({ type: "input_text", text: `下一張只含這些成績格 id：${expected.join("、")}。` }, await ocrFileContent(image));
+      }
+      const response = await requestOcr([
+        { type: "input_text", text: isolatedGridInstructions },
+        await ocrFileContent(file),
+        ...cellContent,
+        ...footerContent,
+      ], "nccu_transcript_isolated_cells",
+      schemaObject(footer ? { ...isolatedGridProperties, summaries: summarySchema } : isolatedGridProperties), request.signal);
+      if (response.error) return response.error;
+      const result = isolatedGridReading.safeParse(response.value);
+      if (!result.success) return NextResponse.json({ error: "OCR 回傳的課程格式無法讀取" }, { status: 502 });
+      const { titles, cells } = result.data;
+      const courses = assembleTranscriptGridCells(parsedSlots.data, titles, cells);
+      return NextResponse.json({ ...mapGridRows({ ...result.data, courses }, parsedSlots.data, earliestYear), originalFileStored: false });
+    }
+    const titleFocus = form.get("focus") === "titles"
+      ? "\n重讀時把注意力放在左側科目欄逐字核對。確認跨行與括號結尾，再按同一橫列抄寫能確認的成績。"
+      : "";
     const response = await requestOcr([
       await ocrFileContent(file),
-      { type: "input_text", text: `${gridInstructions}\n列位置與已定位的上、下學期成績格（false 表示原格為空或橫線）${JSON.stringify(parsedSlots.data)}` },
-    ], "nccu_transcript_numbered_rows", gridSchema, request.signal);
+      { type: "input_text", text: `${gridInstructions}${titleFocus}\n列位置與已定位的上、下學期成績格（false 表示原格為空或橫線）${JSON.stringify(parsedSlots.data)}` },
+      ...footerContent,
+    ], "nccu_transcript_numbered_rows", footer ? gridWithSummarySchema : gridSchema, request.signal);
     if (response.error) return response.error;
     const result = gridReading.safeParse(response.value);
     if (!result.success) return NextResponse.json({ error: "OCR 回傳的課程格式無法讀取" }, { status: 502 });
-    if (!result.data.transcriptVisible) return emptyOcrResult();
-    return NextResponse.json({ ...mapGridRows(result.data, parsedSlots.data, earliestYear), originalFileStored: false });
+    const reading = result.data.transcriptVisible ? result.data : { ...result.data, courses: [] };
+    return NextResponse.json({ ...mapGridRows(reading, parsedSlots.data, earliestYear), originalFileStored: false });
   }
   if (mode === "intact") {
     const response = await requestOcr([
@@ -274,12 +360,14 @@ export async function POST(request: Request) {
     if (response.error) return response.error;
     const result = intactReading.safeParse(response.value);
     if (!result.success) return NextResponse.json({ error: "OCR 回傳的課程格式無法讀取" }, { status: 502 });
-    if (!result.data.transcriptVisible) return emptyOcrResult();
     const { courses } = result.data;
     const year = resolveTranscriptYearHeader(result.data);
-    const actualCourses = courses.filter(({ courseName }) => !isTranscriptPageText(courseName));
+    const actualCourses = result.data.transcriptVisible
+      ? courses.filter(({ courseName }) => !courseName || !isTranscriptPageText(courseName))
+      : [];
     const rows = actualCourses.flatMap((course) => mapYearLine(year, earliestYear, course)).filter((row) => !row.ungraded);
-    return NextResponse.json({ rows, discardedPageText: courses.length - actualCourses.length, originalFileStored: false });
+    return NextResponse.json({ rows, discardedPageText: courses.length - actualCourses.length,
+      summaries: mapYearSummaries(year, result.data.summaries), originalFileStored: false });
   }
   const scanInstructions = mode === "retry"
     ? "這是一個課程區塊。請從上到下用對應的學分與成績欄逐行回查，特別留意區塊開頭、換學期的前後及最末的課程列。"
@@ -303,7 +391,7 @@ export async function POST(request: Request) {
       const courseCode = course.courseCode.trim();
       const dash = isTranscriptGradeDash(course.gradeRaw);
       if (dash && course.credits === null && !courseCode) return [];
-      const gradeRaw = dash ? "" : course.gradeRaw.trim();
+      const gradeRaw = normalizeTranscriptOcrGrade(course.gradeRaw);
       if (!courseName && !courseCode && !gradeRaw && course.credits === null) return [];
       const candidates = courseName ? matchNccuCourse(courseName, course.credits, period.term) : [];
       const [best] = candidates;
@@ -315,6 +403,7 @@ export async function POST(request: Request) {
         credits: course.credits,
         gradeRaw,
         confidence: Math.min(course.confidence, best?.confidence ?? course.confidence * 0.55),
+        requiresOcrReview: !courseName || !gradeRaw || course.credits === null ? true : undefined,
         candidates,
       };
     });
