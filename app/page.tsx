@@ -307,21 +307,6 @@ function FavoriteButton({ course, saved, disabled, toggle }: { course: Course; s
   </button>;
 }
 
-function RecommendationEvidence({ recommendation }: { recommendation: CourseRecommendation }) {
-  return <details className="semantic-hint mt-4 rounded-xl border px-3 py-2 text-sm leading-6" onClick={(event) => event.stopPropagation()}>
-    <summary className="cursor-pointer font-semibold">
-      推薦理由{recommendation.evidence[0]?.topic ? `・${recommendation.evidence[0].topic}` : ""}
-    </summary>
-    <ul className="mt-2 space-y-2">
-      {recommendation.evidence.map(({ topic, queryTerm, matchedTerm, source, excerpt, related }, index) => <li key={`${source}-${index}`}>
-        {topic && <span>「{queryTerm}」對應「{topic}」。{related && `「${matchedTerm}」是可銜接的內容。`}</span>}
-        <span className="block"><strong>{source}</strong>・{excerpt}</span>
-      </li>)}
-    </ul>
-    {recommendation.syllabusUrl && <a className="mt-2 inline-block font-semibold underline" href={recommendation.syllabusUrl} target="_blank" rel="noreferrer">查看來源大綱</a>}
-  </details>;
-}
-
 export default function Home() {
   const [view, setView] = useState<"discover" | "map" | "favorites">("discover");
   const [query, setQuery] = useState("");
@@ -476,7 +461,6 @@ export default function Home() {
   }, [searchKey, submittedQuery, school, level, language]);
 
   const courseById = useMemo(() => new Map(catalogCourses.map((course) => [course.id, course])), [catalogCourses]);
-  const recommendations = useMemo(() => new Map(currentSearch?.data?.results.map((result) => [result.id, result])), [currentSearch]);
   const filtered = useMemo(() => {
     if (currentSearch?.data) return currentSearch.data.results.flatMap(({ id }) => {
       const course = courseById.get(id);
@@ -609,7 +593,6 @@ export default function Home() {
                     <div className="flex items-start justify-between gap-3"><div className="flex items-center gap-2"><SchoolBadge school={course.school} /><span className="text-[11px] font-bold tracking-wide text-[#7d8783]">{course.code}</span></div><FavoriteButton course={course} saved={saved.includes(course.id)} disabled={!storedFavorites} toggle={toggleFavorite} /></div>
                     <h3 className="mt-4 text-lg font-bold tracking-tight"><button type="button" className="block w-full text-left" onClick={(event) => { event.stopPropagation(); openCourse(course); }}>{course.title}</button></h3><p className="mt-1 line-clamp-1 text-xs text-[#77817d]">{course.titleEn}</p><p className="mt-3 line-clamp-2 text-sm leading-6 text-[#53605c]">{course.summary}</p>
                     <div className="mt-4 flex flex-wrap gap-1.5">{course.tags.map((tag) => <span key={tag} className="tag">{tag}</span>)}</div>
-                    {view === "discover" && recommendations.has(course.id) && <RecommendationEvidence recommendation={recommendations.get(course.id)!} />}
                     <div className="mt-5 space-y-1 border-t border-black/7 pt-4 text-[11px] text-[#6d6872]"><p className="flex items-center gap-1.5"><Clock3 size={12} />{course.latestOfferingTerm ? `${course.latestOfferingTerm} 開課・查看分班時間` : course.time}</p><p className="flex items-center gap-1.5"><BookOpen size={12} />{course.credits} 學分・{course.unit}</p></div>
                   </article>
                 ))}
